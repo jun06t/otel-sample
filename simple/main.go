@@ -23,7 +23,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer cleanup()
-	tracer = otel.Tracer("gateway")
+	tracer = otel.Tracer("github.com/jun06t/otel-sample/simple/main")
 
 	h := newHandler(backend)
 

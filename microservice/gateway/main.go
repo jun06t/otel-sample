@@ -10,14 +10,13 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 
 	pb "github.com/jun06t/otel-sample/microservice/proto"
 	"github.com/jun06t/otel-sample/microservice/telemetry"
 )
 
-var tracer trace.Tracer
+var tracer = otel.Tracer("github.com/jun06t/otel-sample/microservice/gateway")
 
 func main() {
 	backend := os.Getenv("BACKEND_ADDR")
@@ -27,7 +26,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer cleanup()
-	tracer = otel.Tracer("gateway")
 
 	h := newHandler(backend)
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 
 	pb "github.com/jun06t/otel-sample/microservice/proto"
@@ -18,7 +17,7 @@ const (
 	port = ":8080"
 )
 
-var tracer trace.Tracer
+var tracer = otel.Tracer("github.com/jun06t/otel-sample/microservice/backend")
 
 type server struct{}
 
@@ -34,7 +33,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer cleanup()
-	tracer = otel.Tracer("backend")
 
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
