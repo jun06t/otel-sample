@@ -24,7 +24,7 @@ func NewTracerProvider(serviceName string) (*sdktrace.TracerProvider, func(), er
 		return nil, nil, err
 	}
 
-	r := NewResource(serviceName, "v1", "local")
+	r := NewResource(serviceName, "1.0.0", "local")
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(r),

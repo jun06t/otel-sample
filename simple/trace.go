@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
@@ -24,7 +23,7 @@ func NewTracerProvider(serviceName string) (*sdktrace.TracerProvider, func(), er
 		return nil, nil, err
 	}
 
-	r := NewResource(serviceName, "v1", "local")
+	r := NewResource(serviceName, "1.0.0", "local")
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(r),
@@ -32,12 +31,6 @@ func NewTracerProvider(serviceName string) (*sdktrace.TracerProvider, func(), er
 	)
 
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(
-		propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		),
-	)
 
 	cleanup := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
