@@ -59,7 +59,8 @@ func (h *handler) hello(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer resp.Body.Close()
+	// span ends after resp.Body.Close.
+	resp.Body.Close()
 
 	Operation3(r.Context())
 }
