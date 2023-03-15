@@ -18,7 +18,7 @@ type handler struct {
 
 var tracer = otel.Tracer("github.com/jun06t/otel-sample/multi-package/service")
 
-func NewHandler(addr string) *handler {
+func NewHandler() *handler {
 	hc := http.Client{
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/jun06t/otel-sample/multi-package/service"
 	"github.com/jun06t/otel-sample/multi-package/telemetry"
@@ -11,15 +10,13 @@ import (
 )
 
 func main() {
-	backend := os.Getenv("BACKEND_ADDR")
-
 	_, cleanup, err := telemetry.NewTracerProvider("otel-sample")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer cleanup()
 
-	h := service.NewHandler(backend)
+	h := service.NewHandler()
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(h.Alive))
