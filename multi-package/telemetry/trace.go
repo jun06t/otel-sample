@@ -3,11 +3,9 @@ package telemetry
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
@@ -79,13 +77,4 @@ func NewStdoutExporter() (sdktrace.SpanExporter, error) {
 		stdouttrace.WithPrettyPrint(),
 		stdouttrace.WithWriter(os.Stderr),
 	)
-}
-
-func NewHTTPMiddleware(opts ...otelhttp.Option) func(http.Handler) http.Handler {
-	opts = append(opts,
-		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
-	)
-	return func(next http.Handler) http.Handler {
-		return otelhttp.NewHandler(next, "server", opts...)
-	}
 }
