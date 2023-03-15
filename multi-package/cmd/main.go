@@ -20,6 +20,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(h.Alive))
-	mux.Handle("/hello", otelhttp.NewHandler(http.HandlerFunc(h.Hello), "server"))
-	http.ListenAndServe(":8000", mux)
+	mux.Handle("/hello", http.HandlerFunc(h.Hello))
+	http.ListenAndServe(":8000", otelhttp.NewHandler(mux, "server",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	))
 }

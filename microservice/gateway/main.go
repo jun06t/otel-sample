@@ -31,7 +31,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(h.alive))
-	mux.Handle("/hello", telemetry.NewHTTPMiddleware()(http.HandlerFunc(h.hello)))
+	mux.Handle("/hello", http.HandlerFunc(h.hello))
+	http.ListenAndServe(":8000", otelhttp.NewHandler(mux, "server",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	))
 	http.ListenAndServe(":8000", mux)
 }
 

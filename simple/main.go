@@ -26,8 +26,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.HandlerFunc(h.alive))
-	mux.Handle("/hello", otelhttp.NewHandler(http.HandlerFunc(h.hello), "server"))
-	http.ListenAndServe(":8000", mux)
+	mux.Handle("/hello", http.HandlerFunc(h.hello))
+	http.ListenAndServe(":8000", otelhttp.NewHandler(mux, "server",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	))
 }
 
 type handler struct {
