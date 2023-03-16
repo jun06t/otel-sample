@@ -75,7 +75,7 @@ func (h *handler) hello(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 
-	Sleep(r.Context())
+	Operation(r.Context())
 
 	hreq, err := http.NewRequestWithContext(r.Context(), "GET", "http://httpbin.org/delay/2", nil)
 	if err != nil {
@@ -88,8 +88,8 @@ func (h *handler) hello(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 }
 
-func Sleep(ctx context.Context) {
-	_, span := tracer.Start(ctx, "sleep")
+func Operation(ctx context.Context) {
+	_, span := tracer.Start(ctx, "op1")
 	defer span.End()
 	time.Sleep(100 * time.Millisecond)
 }

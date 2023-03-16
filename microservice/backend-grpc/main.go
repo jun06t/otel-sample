@@ -23,7 +23,7 @@ type server struct{}
 
 func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
 	log.Println(in.String())
-	Sleep(ctx)
+	Operation(ctx)
 	return &pb.HelloReply{Message: "Hello " + in.Name}, nil
 }
 
@@ -47,8 +47,8 @@ func main() {
 	}
 }
 
-func Sleep(ctx context.Context) {
-	_, span := tracer.Start(ctx, "sleep")
+func Operation(ctx context.Context) {
+	_, span := tracer.Start(ctx, "operation")
 	defer span.End()
 	time.Sleep(200 * time.Millisecond)
 }
