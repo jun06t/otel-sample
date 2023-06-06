@@ -1,0 +1,55 @@
+version: "3"
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=gateway
+    ports:
+      - 8000:8000
+    environment:
+      - BACKEND_ADDR=backend-grpc:8080
+      - SAMPLING_RATIO=1
+      - EXPORTER_ENDPOINT=otel-collector:4317
+    depends_on:
+      - otel-collector
+  backend-grpc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=backend-grpc
+    environment:
+      - EXPORTER_ENDPOINT=otel-collector:4317
+      - SAMPLING_RATIO=0.5
+    depends_on:
+      - otel-collector
+  jaeger:
+    image: "jaegertracing/all-in-one:latest"
+    ports:
+      - "16686:16686"
+      - "14268"
+      - "14250"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+  # Zipkin
+  zipkin:
+    image: openzipkin/zipkin:latest
+    restart: always
+    ports:
+      - "9411:9411"
+  # Collector
+  otel-collector:
+    image: otel/opentelemetry-collector:0.67.0
+    restart: always
+    command: ["--config=/etc/otel-collector-config.yaml", ""]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+    depends_on:
+      - jaeger
+      - zipkin
