@@ -1,79 +1,74 @@
 # Envoy Sidecar
 
-Envoy プロキシをフロントプロキシとして配置し、OpenTelemetry の分散トレーシングに参加させるサンプルです。
+各マイクロサービスに Envoy サイドカーを配置し、サービス間通信を含めた分散トレーシングを実現するサンプルです。
 
 ## アーキテクチャ
 
 ```
-                        ┌──────────┐     gRPC     ┌──────────────┐
-Client ──→ Envoy ──────→│ Gateway  │─────────────→│ Backend-gRPC │
-          (:10000)       │ (:8000)  │              │ (:8080)      │
-                        └────┬─────┘              └──────┬───────┘
-Envoy ─┐                     │ Jaeger HTTP                │ Jaeger HTTP
- OTLP  │                     └──────────┬────────────────┘
- gRPC  │                                ▼
-       └──────────────→┌─────────────────┐
-                       │     Jaeger       │
-                       │  (:16686 UI)     │
-                       └─────────────────┘
+              Envoy                              Envoy
+            (GW sidecar)                      (Backend sidecar)
+Client ──→ [:10000 HTTP] ──→ Gateway ──→ [:10001 gRPC] ──→ Backend-gRPC
+                              (:8000)                        (:8080)
+
+  Envoy-GW ─┐        Gateway ─┐       Envoy-Backend ─┐   Backend ─┐
+   OTLP gRPC│    Jaeger HTTP  │         OTLP gRPC    │  Jaeger HTTP│
+             └──→ Jaeger (:16686) ←────────────────────┘←──────────┘
 ```
+
+**ポイント**: Gateway は `envoy-backend:10001` に gRPC 接続する（`backend-grpc:8080` に直接ではない）。
+Backend への通信も Envoy サイドカーを経由するため、サービス間のネットワークレイヤもトレースに含まれます。
 
 ## 特徴
 
-- **Envoy がトレースに参加**: Envoy 自身がスパンを生成し、Jaeger にエクスポート
+- **サイドカーパターン**: 各サービスに専用の Envoy を配置（envoy-gateway, envoy-backend）
 - **W3C Trace Context**: Envoy の OpenTelemetry tracer で `traceparent` ヘッダーを生成・伝搬
-- **OTLP gRPC エクスポート**: Envoy → Jaeger (:4317) へ OTLP gRPC で直接送信
-- **AlwaysSample**: 全リクエストをトレース（Envoy 側も 100% サンプリング）
+- **4サービスのスパンが統合**: Envoy-GW → Gateway → Envoy-Backend → Backend-gRPC
+- **gRPC プロキシ**: Envoy-Backend が gRPC (HTTP/2) をプロキシし、トレースに参加
 
 ## トレース構造
 
 `curl http://localhost:10000/hello` のトレース:
 
 ```
-envoy-front-proxy: ingress_http              ← Envoy が生成
-└── gateway: server (otelhttp)               ← Gateway が生成
-    ├── gateway: grpc.Greeter/SayHello       ← gRPC クライアント
-    │   └── backend: grpc.Greeter/SayHello   ← gRPC サーバー
-    │       └── backend: operation (200ms)
+envoy-gateway: inbound_http                     ← Envoy-GW が生成
+└── gateway: server (otelhttp)                   ← Gateway が生成
+    ├── gateway: grpc.Greeter/SayHello           ← gRPC クライアント
+    │   └── envoy-backend: inbound_grpc          ← Envoy-Backend が生成
+    │       └── backend: grpc.Greeter/SayHello   ← Backend が生成
+    │           └── backend: operation (200ms)
     └── gateway: op1 (100ms)
 ```
 
-Envoy・Gateway・Backend の3サービスのスパンが同一トレースに統合されます。
+## Envoy 設定
 
-## Envoy 設定（sidecar/envoy.yaml）
+| ファイル | 役割 | Listen | 転送先 |
+|---------|------|--------|--------|
+| `envoy-gateway.yaml` | GW サイドカー（HTTP 受信） | `:10000` | `gateway:8000` |
+| `envoy-backend.yaml` | Backend サイドカー（gRPC 受信） | `:10001` | `backend-grpc:8080` |
 
-```yaml
-tracing:
-  provider:
-    name: envoy.tracers.opentelemetry
-    typed_config:
-      "@type": .../OpenTelemetryConfig
-      grpc_service:
-        envoy_grpc:
-          cluster_name: otel_collector   # Jaeger の OTLP gRPC エンドポイント
-      service_name: envoy-front-proxy
-```
+両方とも OpenTelemetry tracer で Jaeger (:4317) に OTLP gRPC でトレースをエクスポートします。
 
 ## microservice/ との違い
 
 | 項目 | envoy/ (本サンプル) | microservice/ |
 |------|--------------------|---------------|
-| フロントプロキシ | Envoy (:10000) | なし（Gateway に直接アクセス） |
-| Envoy のスパン | あり | なし |
-| 伝搬フォーマット | W3C (Envoy OTel tracer) | W3C (OTel SDK のみ) |
-| クライアントのアクセス先 | `:10000` (Envoy) | `:8000` (Gateway) |
+| Envoy サイドカー | 各サービスに配置 | なし |
+| サービス間通信 | Envoy 経由 | 直接 gRPC |
+| トレース対象 | アプリ + ネットワーク層 | アプリのみ |
+| スパン数 | 多い（Envoy 分が追加） | 少ない |
+| クライアントのアクセス先 | `:10000` (Envoy-GW) | `:8000` (Gateway) |
 
 ## 使い方
 
 ```bash
 docker compose up --build
 
-# Envoy 経由でリクエスト送信
+# Envoy-GW 経由でリクエスト送信
 curl http://localhost:10000/hello
 
-# Jaeger UI でトレースを確認
+# Jaeger UI でトレースを確認（4サービスのスパンが統合）
 open http://localhost:16686
 
-# Envoy admin UI
+# Envoy-GW admin UI
 open http://localhost:9901
 ```
