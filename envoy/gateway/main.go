@@ -67,7 +67,8 @@ func (h *handler) hello(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := h.cli.SayHello(r.Context(), req)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	Operation(r.Context())
