@@ -1,6 +1,6 @@
 module github.com/jun06t/otel-sample/bridge
 
-go 1.20
+go 1.23.0
 
 require (
 	cloud.google.com/go/bigtable v1.18.1
@@ -16,8 +16,7 @@ require (
 
 require (
 	cloud.google.com/go v0.107.0 // indirect
-	cloud.google.com/go/compute v1.15.1 // indirect
-	cloud.google.com/go/compute/metadata v0.2.3 // indirect
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v0.8.0 // indirect
 	cloud.google.com/go/longrunning v0.3.0 // indirect
 	github.com/census-instrumentation/opencensus-proto v0.4.1 // indirect
@@ -38,7 +37,7 @@ require (
 	go.opentelemetry.io/otel/metric v0.37.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v0.37.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/oauth2 v0.4.0 // indirect
+	golang.org/x/oauth2 v0.27.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
