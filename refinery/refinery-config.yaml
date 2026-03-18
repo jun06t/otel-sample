@@ -1,0 +1,38 @@
+General:
+  ConfigurationVersion: 2
+
+Network:
+  ListenAddr: "0.0.0.0:8080"
+  PeerListenAddr: "0.0.0.0:8081"
+  HoneycombAPI: "https://api.honeycomb.io"
+
+GRPCServerParameters:
+  ListenAddr: "0.0.0.0:4317"
+  Enabled: true
+
+OTelTracing:
+  APIHost: "https://api.honeycomb.io"
+  APIKey: "${HONEYCOMB_API_KEY}"
+
+Collection:
+  ShutdownDelay: "0s"
+
+Debugging:
+  DebugServiceAddr: "0.0.0.0:6060"
+
+Logger:
+  Type: "stdout"
+  Level: "info"
+
+Metrics:
+  Type: "prometheus"
+  PrometheusListenAddr: "0.0.0.0:9090"
+
+RedisPeerManagement:
+  Enabled: false
+
+FilePeerManagement:
+  Enabled: true
+  Type: "file"
+  Peers:
+    - "http://refinery:8081"

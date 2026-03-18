@@ -1,0 +1,25 @@
+RulesVersion: 2
+Samplers:
+  __default__:
+    RulesBasedSampler:
+      Rules:
+        - Name: keep errors
+          SampleRate: 1
+          Conditions:
+            - Field: otel.status_code
+              Operator: "="
+              Value: "ERROR"
+        - Name: keep slow requests
+          SampleRate: 1
+          Conditions:
+            - Field: duration_ms
+              Operator: ">="
+              Value: 1000
+        - Name: dynamic sample rest
+          Sampler:
+            EMADynamicSampler:
+              GoalSampleRate: 5
+              FieldList:
+                - http.method
+                - http.target
+                - otel.status_code
