@@ -1,3 +1,4 @@
 FROM envoyproxy/envoy:v1.28-latest
 
-ADD envoy.yaml /etc/envoy/envoy.yaml
+ARG CONFIG_FILE=envoy-gateway.yaml
+ADD ${CONFIG_FILE} /etc/envoy/envoy.yaml

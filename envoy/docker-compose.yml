@@ -1,14 +1,26 @@
 version: "3"
 
 services:
-  envoy:
+  # Gateway sidecar: receives client HTTP, forwards to gateway
+  envoy-gateway:
     build:
       context: ./sidecar
+      args:
+        - CONFIG_FILE=envoy-gateway.yaml
     ports:
       - "10000:10000"
       - "9901:9901"
     depends_on:
       - gateway
+      - jaeger
+  # Backend sidecar: receives gRPC from gateway, forwards to backend-grpc
+  envoy-backend:
+    build:
+      context: ./sidecar
+      args:
+        - CONFIG_FILE=envoy-backend.yaml
+    depends_on:
+      - backend-grpc
       - jaeger
   gateway:
     build:
@@ -17,7 +29,7 @@ services:
       args:
         - TARGET=gateway
     environment:
-      - BACKEND_ADDR=backend-grpc:8080
+      - BACKEND_ADDR=envoy-backend:10001
       - SAMPLING_RATIO=1
       - EXPORTER_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
@@ -38,7 +50,6 @@ services:
     ports:
       - "16686:16686"
       - "14268:14268"
-      - "9411:9411"
     environment:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
       - COLLECTOR_OTLP_ENABLED=true
