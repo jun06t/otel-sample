@@ -22,7 +22,7 @@ func main() {
 	backend := os.Getenv("BACKEND_ADDR")
 	ratio, _ := strconv.ParseFloat(os.Getenv("SAMPLING_RATIO"), 10)
 
-	_, cleanup, err := telemetry.NewTracerProvider("otel-sample", ratio)
+	_, cleanup, err := telemetry.NewTracerProvider("gateway", ratio)
 	if err != nil {
 		log.Fatal(err)
 	}
