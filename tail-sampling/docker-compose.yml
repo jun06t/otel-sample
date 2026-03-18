@@ -1,0 +1,52 @@
+version: "3"
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=gateway
+    ports:
+      - 8000:8000
+    environment:
+      - BACKEND_ADDR=backend-grpc:8080
+      - EXPORTER_ENDPOINT=otel-collector:4317
+    depends_on:
+      - otel-collector
+      - backend-grpc
+  backend-grpc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=backend-grpc
+    environment:
+      - EXPORTER_ENDPOINT=otel-collector:4317
+    depends_on:
+      - otel-collector
+  jaeger:
+    image: "jaegertracing/all-in-one:1.42"
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    restart: always
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+    depends_on:
+      - jaeger
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+    command: run /scripts/loadtest.js
+    depends_on:
+      - gateway
