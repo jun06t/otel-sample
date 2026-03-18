@@ -1,0 +1,44 @@
+version: "3"
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=gateway
+    ports:
+      - 8000:8000
+    environment:
+      - BACKEND_ADDR=backend-grpc:8080
+      - EXPORTER_ENDPOINT=refinery:4317
+    depends_on:
+      - refinery
+      - backend-grpc
+  backend-grpc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TARGET=backend-grpc
+    environment:
+      - EXPORTER_ENDPOINT=refinery:4317
+    depends_on:
+      - refinery
+  refinery:
+    image: honeycombio/refinery:v3.1.1
+    volumes:
+      - ./refinery-config.yaml:/etc/refinery/refinery.yaml
+      - ./refinery-rules.yaml:/etc/refinery/rules.yaml
+    environment:
+      - HONEYCOMB_API_KEY=${HONEYCOMB_API_KEY}
+    ports:
+      - "4317:4317"
+      - "8080:8080"
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/scripts
+    command: run /scripts/loadtest.js
+    depends_on:
+      - gateway
