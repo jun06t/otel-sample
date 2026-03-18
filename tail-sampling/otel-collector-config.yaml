@@ -7,8 +7,8 @@ processors:
   batch:
   tail_sampling:
     decision_wait: 10s
-    num_traces: 100
-    expected_new_traces_per_sec: 10
+    num_traces: 50000
+    expected_new_traces_per_sec: 100
     policies:
       - name: errors-policy
         type: status_code
