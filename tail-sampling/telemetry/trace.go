@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc/filters"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -17,7 +16,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
-	"google.golang.org/grpc"
+	"google.golang.org/grpc/stats"
 )
 
 func init() {
@@ -33,7 +32,7 @@ func NewTracerProvider(ctx context.Context, otelAgentAddr, serviceName string) (
 	traceClient := otlptracegrpc.NewClient(
 		otlptracegrpc.WithInsecure(),
 		otlptracegrpc.WithEndpoint(otelAgentAddr),
-		otlptracegrpc.WithDialOption(grpc.WithBlock()))
+	)
 	exporter, err := otlptrace.New(ctx, traceClient)
 	if err != nil {
 		return nil, nil, err
@@ -72,17 +71,12 @@ func NewResource(serviceName string, version string, environment string) *resour
 	)
 }
 
-func NewUnaryServerInterceptor(opts ...otelgrpc.Option) grpc.UnaryServerInterceptor {
-	opts = append(opts,
-		otelgrpc.WithInterceptorFilter(
-			filters.Not(filters.HealthCheck()),
-		),
-	)
-	return otelgrpc.UnaryServerInterceptor(opts...)
+func NewServerStatsHandler(opts ...otelgrpc.Option) stats.Handler {
+	return otelgrpc.NewServerHandler(opts...)
 }
 
-func NewUnaryClientInterceptor(opts ...otelgrpc.Option) grpc.UnaryClientInterceptor {
-	return otelgrpc.UnaryClientInterceptor(opts...)
+func NewClientStatsHandler(opts ...otelgrpc.Option) stats.Handler {
+	return otelgrpc.NewClientHandler(opts...)
 }
 
 func NewHTTPMiddleware(opts ...otelhttp.Option) func(http.Handler) http.Handler {
