@@ -6,11 +6,11 @@ import (
 	"os"
 	"time"
 
-	octrace "go.opencensus.io/trace"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/bridge/opencensus"
-	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -18,12 +18,11 @@ import (
 )
 
 func init() {
-	bridge := otel.GetTracerProvider().Tracer("go.opentelemetry.io/otel/bridge/opencensus")
-	octrace.DefaultTracer = opencensus.NewTracer(bridge)
+	opencensus.InstallTraceBridge()
 }
 
 func NewTracerProvider(serviceName string) (*sdktrace.TracerProvider, func(), error) {
-	exporter, err := NewJaegerExporter()
+	exporter, err := NewOTLPExporter(context.Background())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,15 +60,14 @@ func NewResource(serviceName string, version string, environment string) *resour
 	)
 }
 
-func NewJaegerExporter() (sdktrace.SpanExporter, error) {
-	// Port details: https://www.jaegertracing.io/docs/getting-started/
+func NewOTLPExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	endpoint := os.Getenv("EXPORTER_ENDPOINT")
 
-	exporter, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(endpoint)))
-	if err != nil {
-		return nil, err
-	}
-	return exporter, nil
+	traceClient := otlptracegrpc.NewClient(
+		otlptracegrpc.WithInsecure(),
+		otlptracegrpc.WithEndpoint(endpoint),
+	)
+	return otlptrace.New(ctx, traceClient)
 }
 
 func NewStdoutExporter() (sdktrace.SpanExporter, error) {

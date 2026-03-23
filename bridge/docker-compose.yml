@@ -7,7 +7,7 @@ services:
     ports:
       - 8000:8000
     environment:
-      - EXPORTER_ENDPOINT=http://jaeger:14268/api/traces
+      - EXPORTER_ENDPOINT=jaeger:4317
       - BIGTABLE_EMULATOR_HOST=bigtable:8086
   bigtable:
     image: jun06t/bigtable-emulator
