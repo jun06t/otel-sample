@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/jun06t/otel-sample/sampling/proto"
 	"github.com/jun06t/otel-sample/sampling/telemetry"
@@ -41,9 +42,9 @@ type handler struct {
 }
 
 func newHandler(addr string) *handler {
-	conn, err := grpc.Dial(addr,
-		grpc.WithInsecure(),
-		grpc.WithUnaryInterceptor(telemetry.NewUnaryClientInterceptor()),
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(telemetry.NewClientStatsHandler()),
 	)
 	if err != nil {
 		log.Fatal(err)

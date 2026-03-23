@@ -42,7 +42,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := grpc.NewServer(grpc.UnaryInterceptor(telemetry.NewUnaryServerInterceptor()))
+	s := grpc.NewServer(grpc.StatsHandler(telemetry.NewServerStatsHandler()))
 	pb.RegisterGreeterServer(s, &server{})
 	err = s.Serve(lis)
 	if err != nil {
