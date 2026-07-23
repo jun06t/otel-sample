@@ -1,5 +1,5 @@
-// Package consumer は、まとめて受信した複数メッセージを 1 本の process span で処理する。
-// parent-child ではなく span link で各メッセージの発行元トレースへ連結するのがポイント。
+// Package consumer は、まとめて受信した複数メッセージを 1 本の receive span で表現し、
+// 各メッセージの発行元トレースへ span link で連結する（messaging semconv 準拠のバッチ処理）。
 package consumer
 
 import (
@@ -11,15 +11,20 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ProcessBatch は受信済みメッセージ群を 1 本の CONSUMER span で処理する。
+// ConsumeBatch は受信済みメッセージ群を、1 本の receive span（batch pull 操作）と
+// その配下の process span（各メッセージの処理）で表現する。
 //
-// span は各メッセージの発行元 SpanContext への span link を持つ。
-// span は 1 つの親しか持てないため、複数メッセージ（＝複数の発行元トレース）を
-// 束ねて処理するバッチ処理では link が唯一の相関手段になる（messaging semconv 準拠）。
-func ProcessBatch(ctx context.Context, tracerName, destination string, msgs []*pubsub.Message) {
+// ★ span link は receive span に張る。
+//
+//	receive は「1 回の操作で複数メッセージをまとめて取り出す」発行元横断の操作であり、
+//	span は親を 1 つしか持てないため、複数の発行元トレースへの相関手段は link に限られる
+//	（messaging semconv 準拠）。これにより subscribe(receive) 側と publish(send) 側が
+//	link で繋がる。
+func ConsumeBatch(ctx context.Context, tracerName, destination string, msgs []*pubsub.Message) {
 	tracer := otel.Tracer(tracerName)
 	prop := otel.GetTextMapPropagator()
 
@@ -29,25 +34,39 @@ func ProcessBatch(ctx context.Context, tracerName, destination string, msgs []*p
 		parentCtx := prop.Extract(context.Background(), propagation.MapCarrier(m.Attributes))
 		links = append(links, trace.Link{
 			SpanContext: trace.SpanContextFromContext(parentCtx),
-			Attributes: []attribute.KeyValue{
-				attribute.String("messaging.message.id", m.ID),
-			},
+			Attributes:  []attribute.KeyValue{semconv.MessagingMessageID(m.ID)},
 		})
 	}
 
-	_, span := tracer.Start(ctx, "process "+destination,
-		trace.WithSpanKind(trace.SpanKindConsumer),
-		trace.WithLinks(links...), // ★ 1 本の span に N 件の link
+	// receive span: バッチ取り出し操作。★ここに N 件の link を張り、発行元(publish)と連結する。
+	ctx, receiveSpan := tracer.Start(ctx, "receive "+destination,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithLinks(links...), // ★ 1 本の receive span に N 件の link（1:N）
 		trace.WithAttributes(
-			attribute.String("messaging.system", "gcp_pubsub"),
-			attribute.String("messaging.destination.name", destination),
-			attribute.String("messaging.operation.type", "process"),
-			attribute.String("messaging.operation.name", "process"),
-			attribute.Int("messaging.batch.message_count", len(msgs)),
+			semconv.MessagingSystemGCPPubSub,
+			semconv.MessagingDestinationName(destination),
+			semconv.MessagingOperationTypeReceive,
+			semconv.MessagingOperationName("receive"),
+			semconv.MessagingBatchMessageCount(len(msgs)),
 		),
 	)
-	defer span.End()
+	defer receiveSpan.End()
 
-	log.Printf("processing batch of %d messages with span links", len(msgs))
-	time.Sleep(30 * time.Millisecond) // 疑似バッチ処理
+	log.Printf("received a batch of %d messages (linked to their producers)", len(msgs))
+
+	// 各メッセージを process span（receive span の子）で処理する。
+	for _, m := range msgs {
+		_, span := tracer.Start(ctx, "process "+destination,
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				semconv.MessagingSystemGCPPubSub,
+				semconv.MessagingDestinationName(destination),
+				semconv.MessagingOperationTypeProcess,
+				semconv.MessagingOperationName("process"),
+				semconv.MessagingMessageID(m.ID),
+			),
+		)
+		time.Sleep(10 * time.Millisecond) // 疑似処理
+		span.End()
+	}
 }
