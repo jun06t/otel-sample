@@ -1,0 +1,22 @@
+version: "3"
+
+services:
+  batch:
+    build:
+      context: .
+    # バッチは 1 回実行して終了する（Run-to-completion）。再起動しない。
+    restart: "no"
+    environment:
+      - SERVICE_NAME=example-batch
+      - EXPORTER_ENDPOINT=jaeger:4317
+    depends_on:
+      - jaeger
+  jaeger:
+    image: "jaegertracing/all-in-one:1.42"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
