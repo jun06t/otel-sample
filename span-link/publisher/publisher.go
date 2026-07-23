@@ -8,9 +8,9 @@ import (
 
 	"cloud.google.com/go/pubsub"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -24,15 +24,15 @@ func Publish(ctx context.Context, tracerName, destination string, topic *pubsub.
 		msgCtx, span := tracer.Start(context.Background(), "send "+destination,
 			trace.WithSpanKind(trace.SpanKindProducer),
 			trace.WithAttributes(
-				attribute.String("messaging.system", "gcp_pubsub"),
-				attribute.String("messaging.destination.name", destination),
-				attribute.String("messaging.operation.type", "send"),
-				attribute.String("messaging.operation.name", "send"),
+				semconv.MessagingSystemGCPPubSub,
+				semconv.MessagingDestinationName(destination),
+				semconv.MessagingOperationTypeSend,
+				semconv.MessagingOperationName("send"),
 			),
 		)
 
 		msg := &pubsub.Message{
-			Data:       []byte(fmt.Sprintf("message-%d", i)),
+			Data:       fmt.Appendf(nil, "message-%d", i),
 			Attributes: map[string]string{},
 		}
 		// ★ traceparent をメッセージ属性に inject。consumer 側はこれを Extract して link 先にする。
@@ -45,7 +45,7 @@ func Publish(ctx context.Context, tracerName, destination string, topic *pubsub.
 			span.End()
 			return err
 		}
-		span.SetAttributes(attribute.String("messaging.message.id", id))
+		span.SetAttributes(semconv.MessagingMessageID(id))
 		span.End()
 	}
 	return nil
