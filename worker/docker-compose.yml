@@ -1,0 +1,38 @@
+version: "3"
+
+services:
+  worker:
+    build:
+      context: .
+    environment:
+      - SERVICE_NAME=example-worker
+      - EXPORTER_ENDPOINT=jaeger:4317
+      - PROJECT_ID=demo-project
+      - TOPIC_ID=demo-topic
+      - SUBSCRIPTION_ID=demo-sub
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - BOOTSTRAP=true
+    depends_on:
+      - jaeger
+      - pubsub-emulator
+  pubsub-emulator:
+    image: google/cloud-sdk:emulators
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - pubsub
+      - start
+      - --project=demo-project
+      - --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+  jaeger:
+    image: "jaegertracing/all-in-one:1.42"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
