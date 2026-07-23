@@ -56,11 +56,12 @@ func run() error {
 		return err
 	}
 
-	// 3) まとめたメッセージを receive span（N 件の span link 付き）+ process span（子）で処理。
+	// 3) 各メッセージを 1 件ずつ process span で処理する。
+	//    各 process span は別トレースになり、その発行元(publish)へ span link で 1:1 に紐付く。
 	//    destination は消費側なのでサブスクリプションを渡す。
-	consumer.ConsumeBatch(ctx, conf.ServiceName, conf.SubscriptionID, msgs)
+	consumer.ConsumeMessages(conf.ServiceName, conf.SubscriptionID, msgs)
 
-	log.Printf("done. consumed %d messages (receive span linked to producers)", len(msgs))
+	log.Printf("done. consumed %d messages (each process linked 1:1 to its producer)", len(msgs))
 	return nil
 }
 

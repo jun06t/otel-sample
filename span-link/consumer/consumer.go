@@ -1,5 +1,5 @@
-// Package consumer は、まとめて受信した複数メッセージを 1 本の receive span で表現し、
-// 各メッセージの発行元トレースへ span link で連結する（messaging semconv 準拠のバッチ処理）。
+// Package consumer は、受信した各メッセージを、その発行元トレースへ span link で
+// 1:1 に連結した process span で処理する（messaging semconv 準拠）。
 package consumer
 
 import (
@@ -15,49 +15,29 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ConsumeBatch は受信済みメッセージ群を、1 本の receive span（batch pull 操作）と
-// その配下の process span（各メッセージの処理）で表現する。
+// ConsumeMessages は各メッセージを 1 件ずつ process span で処理する。
 //
-// ★ span link は receive span に張る。
+// ★ 各 process span は「親を持たない新規 root（＝発行元とは別トレース）」として開始し、
 //
-//	receive は「1 回の操作で複数メッセージをまとめて取り出す」発行元横断の操作であり、
-//	span は親を 1 つしか持てないため、複数の発行元トレースへの相関手段は link に限られる
-//	（messaging semconv 準拠）。これにより subscribe(receive) 側と publish(send) 側が
-//	link で繋がる。
-func ConsumeBatch(ctx context.Context, tracerName, destination string, msgs []*pubsub.Message) {
+//	発行元(publish)へは parent-child ではなく span link を 1 本張って 1:1 で紐付ける。
+//	発行元と消費側を別トレースに保ったまま相関できるのが span link の役割（messaging semconv 準拠）。
+//	常駐ワーカーのようにメッセージを 1 件ずつ捌く実運用に近い形。
+func ConsumeMessages(tracerName, destination string, msgs []*pubsub.Message) {
 	tracer := otel.Tracer(tracerName)
 	prop := otel.GetTextMapPropagator()
 
-	// 各メッセージ属性から発行元の SpanContext を Extract し、link を組み立てる。
-	links := make([]trace.Link, 0, len(msgs))
 	for _, m := range msgs {
-		parentCtx := prop.Extract(context.Background(), propagation.MapCarrier(m.Attributes))
-		links = append(links, trace.Link{
-			SpanContext: trace.SpanContextFromContext(parentCtx),
-			Attributes:  []attribute.KeyValue{semconv.MessagingMessageID(m.ID)},
-		})
-	}
+		// メッセージ属性から発行元の SpanContext を Extract する。
+		producerCtx := prop.Extract(context.Background(), propagation.MapCarrier(m.Attributes))
 
-	// receive span: バッチ取り出し操作。★ここに N 件の link を張り、発行元(publish)と連結する。
-	ctx, receiveSpan := tracer.Start(ctx, "receive "+destination,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithLinks(links...), // ★ 1 本の receive span に N 件の link（1:N）
-		trace.WithAttributes(
-			semconv.MessagingSystemGCPPubSub,
-			semconv.MessagingDestinationName(destination),
-			semconv.MessagingOperationTypeReceive,
-			semconv.MessagingOperationName("receive"),
-			semconv.MessagingBatchMessageCount(len(msgs)),
-		),
-	)
-	defer receiveSpan.End()
-
-	log.Printf("received a batch of %d messages (linked to their producers)", len(msgs))
-
-	// 各メッセージを process span（receive span の子）で処理する。
-	for _, m := range msgs {
-		_, span := tracer.Start(ctx, "process "+destination,
+		// ★ context.Background() から開始 → 発行元とは別トレース（新規 root）。
+		//    その発行元へ span link を 1 本張る（publish ↔ process が 1:1 で対応）。
+		_, span := tracer.Start(context.Background(), "process "+destination,
 			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithLinks(trace.Link{
+				SpanContext: trace.SpanContextFromContext(producerCtx),
+				Attributes:  []attribute.KeyValue{semconv.MessagingMessageID(m.ID)},
+			}),
 			trace.WithAttributes(
 				semconv.MessagingSystemGCPPubSub,
 				semconv.MessagingDestinationName(destination),
@@ -66,6 +46,7 @@ func ConsumeBatch(ctx context.Context, tracerName, destination string, msgs []*p
 				semconv.MessagingMessageID(m.ID),
 			),
 		)
+		log.Printf("processing message id=%s (linked 1:1 to its producer)", m.ID)
 		time.Sleep(10 * time.Millisecond) // 疑似処理
 		span.End()
 	}
