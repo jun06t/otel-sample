@@ -1,4 +1,4 @@
-module github.com/jun06t/otel-sample/sampling
+module github.com/jun06t/otel-sample/collector
 
 go 1.25.0
 

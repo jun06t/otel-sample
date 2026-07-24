@@ -12,11 +12,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 
-	pb "github.com/jun06t/otel-sample/sampling/proto"
-	"github.com/jun06t/otel-sample/sampling/telemetry"
+	pb "github.com/jun06t/otel-sample/collector/proto"
+	"github.com/jun06t/otel-sample/collector/telemetry"
 )
 
-var tracer = otel.Tracer("github.com/jun06t/otel-sample/sampling/gateway")
+var tracer = otel.Tracer("github.com/jun06t/otel-sample/collector/gateway")
 
 func main() {
 	log.Println("Initialize the gateway server...")

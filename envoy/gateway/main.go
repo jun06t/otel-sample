@@ -13,11 +13,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/jun06t/otel-sample/sampling/proto"
-	"github.com/jun06t/otel-sample/sampling/telemetry"
+	pb "github.com/jun06t/otel-sample/envoy/proto"
+	"github.com/jun06t/otel-sample/envoy/telemetry"
 )
 
-var tracer = otel.Tracer("github.com/jun06t/otel-sample/sampling/gateway")
+var tracer = otel.Tracer("github.com/jun06t/otel-sample/envoy/gateway")
 
 func main() {
 	backend := os.Getenv("BACKEND_ADDR")
