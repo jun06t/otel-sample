@@ -1,4 +1,4 @@
-module github.com/jun06t/otel-sample/sampling
+module github.com/jun06t/otel-sample/envoy
 
 go 1.26
 

@@ -11,15 +11,15 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 
-	pb "github.com/jun06t/otel-sample/sampling/proto"
-	"github.com/jun06t/otel-sample/sampling/telemetry"
+	pb "github.com/jun06t/otel-sample/envoy/proto"
+	"github.com/jun06t/otel-sample/envoy/telemetry"
 )
 
 const (
 	port = ":8080"
 )
 
-var tracer = otel.Tracer("github.com/jun06t/otel-sample/sampling/backend")
+var tracer = otel.Tracer("github.com/jun06t/otel-sample/envoy/backend")
 
 type server struct{}
 

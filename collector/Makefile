@@ -4,7 +4,7 @@ proto: proto_format
 	protoc \
 	-I=./proto \
 	--go_out=plugins=grpc:./proto \
-	--go_opt=module=github.com/jun06t/otel-sample/sampling/proto \
+	--go_opt=module=github.com/jun06t/otel-sample/collector/proto \
 	./proto/*.proto
 
 proto_format:
