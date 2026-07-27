@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    environment:
+      # SigNoz が内蔵する OTel Collector の OTLP gRPC エンドポイント。
+      # SigNoz は別途起動しておく (README 参照)。
+      # Docker Desktop ではホスト上の SigNoz を host.docker.internal で解決する。
+      - EXPORTER_ENDPOINT=host.docker.internal:4317
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
