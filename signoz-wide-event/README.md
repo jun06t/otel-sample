@@ -108,16 +108,34 @@ otelzap は公式ブリッジ `go.opentelemetry.io/contrib/bridges/otelzap` で�
 
 ### 1. SigNoz を起動（別途）
 
-SigNoz は ClickHouse を含む一式なので、公式手順で先に起動します。
+SigNoz は ClickHouse を含む複数コンテナ構成です。現在の公式手順は Foundry(`foundryctl`) で、
+**git clone は不要**です（従来の `git clone → deploy/docker` は v0.130.0 で deprecated）。
 
 ```bash
-git clone -b main https://github.com/SigNoz/signoz.git
-cd signoz/deploy/docker
-docker compose up -d
-# UI: http://localhost:8080 （バージョンにより :3301）
+# 1. foundryctl を入れる
+curl -fsSL https://signoz.io/foundry.sh | bash
+
+# 2. casting.yaml を作成
+cat > casting.yaml <<'YAML'
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: signoz
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+YAML
+
+# 3. 検証→生成→起動を一括
+foundryctl cast -f casting.yaml
 ```
 
-SigNoz は OTLP gRPC を `:4317` で受けます。
+- UI: <http://localhost:8080>
+- OTLP: gRPC `:4317` / HTTP `:4318`
+
+自前で起動したくない場合は **SigNoz Cloud**（マネージド）に OTLP 送信する選択肢もあります。
+最新手順は公式ドキュメント <https://signoz.io/docs/install/docker/> を参照。
 
 ### 2. app を起動
 
