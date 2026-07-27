@@ -139,17 +139,23 @@ foundryctl cast -f casting.yaml
 
 ### 2. app を起動
 
-ローカル実行（最短）:
+**ローカル実行（最短）**。host に公開された OTLP `:4317` に直接送る:
 
 ```bash
 EXPORTER_ENDPOINT=localhost:4317 go run .
 ```
 
-または Docker（Docker Desktop 前提。SigNoz をホストで起動している場合）:
+**Docker で起動**する場合は、app を **SigNoz のネットワークに相乗り**させ、ingester の
+コンテナ名へ直接送る（`docker-compose.yml` は既定でそう設定済み）:
 
 ```bash
 docker compose up --build
 ```
+
+- 送信先は `signoz-ingester:4317`（`host.docker.internal` は IPv6 解決で届かないことがあるため使わない）。
+- `docker-compose.yml` は外部ネットワーク `signoz-network` に join する。foundry が作る
+  ネットワーク名が異なる場合は `docker network ls` で確認し、compose の `networks.signoz.name` を合わせる。
+   ingester の DNS 名も併せて確認する場合は `docker inspect <ingester> --format '{{json .NetworkSettings.Networks}}'`。
 
 ### 3. リクエストを送る
 
