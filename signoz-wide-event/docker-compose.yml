@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    environment:
+      # SigNoz が内蔵する OTel Collector(ingester) の OTLP gRPC。
+      # 下の signoz ネットワークに相乗りし、コンテナ名で直接届ける
+      # (host.docker.internal 経由だと IPv6 解決で届かないことがあるため避ける)。
+      - EXPORTER_ENDPOINT=signoz-ingester:4317
+    networks:
+      - signoz
+
+networks:
+  # foundry で起動した SigNoz が作る外部ネットワーク。
+  # 名前が異なる場合は `docker network ls` で確認して合わせる。
+  signoz:
+    external: true
+    name: signoz-network
