@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // maxAttempts は DB クエリの最大試行回数。
@@ -26,9 +27,14 @@ type userService struct {
 //	区間と境界がある操作              → span(fetch user / cache get / SELECT users)
 //	操作全体の性質で、独自の時刻が不要 → span 属性(user.id, cache.hit, retry.count, error.type)
 //	名前の付いた時点の出来事          → event(db.query.retry, user.fetch.exception)
-//	名前で引かない診断メッセージ      → 普通の LogRecord(store.go の dbQuery)
+//	名前で引かない診断メッセージ      → 普通の LogRecord(store.go の selectUser)
+//
+// 開始時に分かる属性(user.id)は tracer.Start で渡す。sampler が判断に使えるのは
+// span 作成時にある属性だけなので、後から SetAttributes すると sampling に効かない。
 func (s *userService) fetchUser(ctx context.Context, userID string) (name string, err error) {
-	ctx, span := tracer.Start(ctx, "fetch user")
+	ctx, span := tracer.Start(ctx, "fetch user",
+		trace.WithAttributes(attribute.String("user.id", userID)),
+	)
 	defer span.End()
 
 	var (
@@ -38,9 +44,8 @@ func (s *userService) fetchUser(ctx context.Context, userID string) (name string
 
 	// span.End より先に実行される(defer は LIFO)。
 	defer func() {
-		// 操作全体の性質は、終了時にまとめてこの span の属性に書く。
+		// 終わるまで分からない操作全体の性質は、終了時にまとめてこの span の属性に書く。
 		span.SetAttributes(
-			attribute.String("user.id", userID),
 			attribute.Bool("cache.hit", cacheHit),
 			attribute.Int("retry.count", retries),
 		)
