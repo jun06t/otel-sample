@@ -77,6 +77,7 @@ span event には severity も Body もないので、retry の severity とメ�
 - **`cache.hit` は span 属性**：cache を引くのは 1 回だけで、独自の時刻も要らない。区間は `cache get` 子 span が持つ
 - **`retry.count` は span 属性、`db.query.retry` は event**：何回リトライしたかは操作全体の性質。一方、各リトライの判断は 0 回以上起き、その回の待ち時間（`retry.backoff_ms`）を持つ時点の出来事
 - **例外は event**：semconv に従い、EventName を「操作名 + `.exception`」にする。失敗の事実は span の status と `error.type` に分ける
+- **`user.id` は span 開始時に渡す**：開始時に分かる属性は `tracer.Start` で渡す。sampler が判断に使えるのは span 作成時にある属性だけなので、終了時に書く属性は sampling に効かない
 - **診断メッセージは普通のログ**：名前で引く想定がないので EventName を付けない
 - **エラーメッセージは Body に入れる**：`error.message` 属性は非推奨。log-based event の識別も、非推奨の `event.name` 属性ではなく EventName フィールドで行う
 
