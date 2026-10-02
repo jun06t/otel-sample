@@ -4,8 +4,8 @@ go 1.26
 
 require (
 	go.opentelemetry.io/otel v1.45.0
-	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.20.0
-	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.44.0
+	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.21.0
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.45.0
 	go.opentelemetry.io/otel/log v0.21.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/sdk/log v0.21.0
