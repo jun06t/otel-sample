@@ -1,35 +1,58 @@
-# event-comparison — ルート span を wide event にし、残りの置き場を選び分ける
+# event-comparison — span を wide event として太らせ、残りの置き場を選び分ける
 
-参照: [All you need is Wide Events, not "Metrics, Logs and Traces"](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics) / [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
+参照: [Observability 1.0 と Observability 2.0](https://christina04.hatenablog.com/entry/observability_2_0) / [All you need is Wide Events, not "Metrics, Logs and Traces"](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics) / [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
 
 「ユーザー取得 → cache miss → DB クエリを最大 3 回リトライ」という 1 つの処理で、
-ルート span をリクエスト 1 件分の **wide event** にし、それ以外は記録したいものごとに
-置き場を選び分けるサンプル。stdout exporter で出力するので、
+すべての span を **wide event**（高次元・高カーディナリティな 1 行）として太らせ、
+それ以外は記録したいものごとに置き場を選び分けるサンプル。stdout exporter で出力するので、
 バックエンドなしで **何がどの信号に・どの形で載るか**を確認できる。
 
-## ルート span を wide event にする
+## span を wide event として太らせる
 
-wide event は、1 件の処理について、関係しそうな文脈を何に使うか分からなくても全部載せた
-フラットなキーと値の集まり。障害調査のときに、事前に用意していない組み合わせ
-（例: OS のバージョン × アプリのバージョン）で絞り込み・グループ化して原因を探せる（unknown unknowns）。
-cardinality が高い値（`user.id` など）も避けない。OTel では span が一番近い概念なので、ルート span の属性に集める。
+span と聞くと、名前・所要時間・status と数個のタグを持つ Observability 1.0 のイメージになりがち。
+Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**とみなし、
+1 span あたり数十〜数百の列を持たせる。関係しそうな文脈は何に使うか分からなくても載せ、
+`user.id` のような cardinality が高い値も避けない。
 
-| タイミング | 属性 | 渡し方 |
-|---|---|---|
-| 開始時に分かる文脈 | `user.id`、`user_agent.name` / `user_agent.version`（アプリ）、`user_agent.os.name` / `user_agent.os.version`、`app.user.country`、`app.user.plan`、`app.feature.new_profile` | `tracer.Start` の `trace.WithAttributes` |
-| 終わるまで分からない結果 | `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、失敗時は `error.type` | 終了時の `defer` で `SetAttributes` |
+`go run . -fail` の 1 トレースを表にすると次のようになる（空欄はその span に無い列）。
+
+| span.name | status | user.id | user_agent.os.version | user_agent.version | app.user.plan | cache.hit | retry.count | app.db.attempt | app.db.pool.idle | error.type | … |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| fetch user | Error | alice | 14 | 2.3.1 | premium | false | 2 | | | DBTimeoutError | … |
+| cache get | Unset | | | | | false | | | | | … |
+| SELECT users | Error | | | | | | | 1 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | | | | | | 2 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | | | | | | 3 | 0 | DBTimeoutError | … |
+
+- **メイン span（`fetch user`）にはリクエスト文脈**：開始時に分かる `user.id`、`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
+- **子 span にはその操作固有の文脈**：`cache get` には `cache.key` / `cache.hit`、`SELECT users` には `db.*`、`db.client.connection.pool.name`、試行番号 `app.db.attempt`、プールの状態 `app.db.pool.in_use` / `app.db.pool.idle`、成功時の `db.response.returned_rows`
+
+これを Honeycomb や SigNoz（ClickHouse）のようなバックエンドに入れると、事前にメトリクスを定義しなくても、
+どの列でも絞り込み・グループ化できる（unknown unknowns の調査）。
+
+```
+WHERE user.id = "alice" AND status = Error              -- 問い合わせの 1 件を抽出
+WHERE span.name = "fetch user" GROUP BY user_agent.os.version, user_agent.version
+                                                        -- 未知の組み合わせでエラー率を切る
+WHERE span.name = "SELECT users" GROUP BY app.db.pool.idle
+                                                        -- 子 span の列でも集計できる
+```
+
+> [!note] 集計軸にしたい列は同じ span に載せる
+> 別々の span にある列は、同時に条件にできない。たとえば `WHERE span.name = "SELECT users" AND app.user.plan = "premium"` は、
+> `app.user.plan` が `fetch user` にしか無いので 0 件になる。プランごとに DB の遅さを見たいなら、`SELECT users` にもプランを載せる必要がある。
 
 開始時に分かるものを開始時に渡すのは、sampler が判断に使えるのが span 作成時にある属性だけだから。
 
 ## 置き場の選び方
 
 wide event 以外の置き場は、OTel の semconv（Events）の指針に従っている。
-「wide event」は OTel の公式用語ではないが、この表では「操作全体の性質 → span 属性」をルート span で徹底したものに当たる。
+「wide event」は OTel の公式用語ではなく、この表のどこか 1 行に当たるものでもない。span（と span 属性）をどう太らせるかという粒度の捉え方。
 
 | 記録したいもの | 置き場 | このサンプルでの例 |
 |---|---|---|
 | 区間と境界がある操作 | span | `fetch user`、子 span の `cache get`、`SELECT users` |
-| 操作全体の性質で、独自の時刻が不要 | span 属性 | ルート span の wide event の属性（上の表） |
+| 操作全体の性質で、独自の時刻が不要 | span 属性 | 各 span の wide event の列（上の表） |
 | 名前の付いた時点の出来事（0 回以上起き、その回の時刻・severity・属性が要る） | event（EventName 付き LogRecord） | `db.query.retry`、`user.fetch.exception` |
 | 名前で引かない診断メッセージ | 普通の LogRecord（EventName なし） | `connection pool exhausted: ...` |
 
@@ -57,7 +80,10 @@ LogRecord は Emit した瞬間に、span は End した瞬間に出力される
 ```
 Span "cache get"     parent=fetch user  cache.key=user:alice, cache.hit=false
 LogRecord            (EventName なし)  DEBUG  Body="connection pool exhausted: in_use=10 idle=0"
-Span "SELECT users"  parent=fetch user  CLIENT  status=Error  db.system.name=postgresql, ..., error.type=*main.DBTimeoutError
+Span "SELECT users"  parent=fetch user  CLIENT  status=Error
+                     db.system.name=postgresql, db.operation.name=SELECT, db.collection.name=users,
+                     db.client.connection.pool.name=users-primary, app.db.attempt=1,
+                     app.db.pool.in_use=10, app.db.pool.idle=0, error.type=*main.DBTimeoutError
 LogRecord            EventName=db.query.retry  WARN  Body="db query timeout"  retry.attempt=2, retry.backoff_ms=10, error.type=...
   （2 回目の SELECT users と db.query.retry も同様）
 Span "SELECT users"  （3 回目）status=Error
@@ -97,7 +123,8 @@ span event には severity も Body もないので、retry の severity とメ�
 - **`cache.hit` は span 属性**：cache を引くのは 1 回だけで、独自の時刻も要らない。区間は `cache get` 子 span が持つ
 - **`retry.count` は span 属性、`db.query.retry` は event**：何回リトライしたかは操作全体の性質。一方、各リトライの判断は 0 回以上起き、その回の待ち時間（`retry.backoff_ms`）を持つ時点の出来事
 - **例外は event**：semconv に従い、EventName を「操作名 + `.exception`」にする。失敗の事実は span の status と `error.type` に分ける
-- **文脈はルート span に全部載せる**：何に使うか分からなくても載せておくと、後から任意の組み合わせで絞り込める。`app.db.call.count` のように `retry.count` から計算できる値も、そのまま集計に使えるよう重ねて載せる
+- **文脈は span に全部載せる**：何に使うか分からなくても載せておくと、後から任意の組み合わせで絞り込める。`app.db.call.count` のように `retry.count` から計算できる値も、そのまま集計に使えるよう重ねて載せる
+- **診断の数値は span 属性にも載せる**：プールの状態は普通のログのメッセージにも入れているが、集計に使えるよう `SELECT users` span の列にもしている
 - **診断メッセージは普通のログ**：名前で引く想定がないので EventName を付けない
 - **エラーメッセージは Body に入れる**：`error.message` 属性は非推奨。log-based event の識別も、非推奨の `event.name` 属性ではなく EventName フィールドで行う
 
@@ -105,7 +132,7 @@ span event には severity も Body もないので、retry の severity とメ�
 
 | 属性 | 種類 |
 |---|---|
-| `error.type`, `exception.*`, `user.id`, `user_agent.*`, `db.system.name`, `db.operation.name`, `db.collection.name` | semconv の標準属性（`user_agent.name` などは Development） |
+| `error.type`, `exception.*`, `user.id`, `user_agent.*`, `db.system.name`, `db.operation.name`, `db.collection.name`, `db.client.connection.pool.name`, `db.response.returned_rows` | semconv の標準属性（`user_agent.*` や `db.client.connection.pool.name` などは Development） |
 | `app.*`, `cache.key`, `cache.hit`, `retry.count`, `retry.attempt`, `retry.backoff_ms` | このサンプル独自の属性 |
 
 国やプランのように semconv に適切な名前がない文脈は、将来の semconv と衝突しないよう `app.` を付けている。
@@ -121,7 +148,7 @@ OTLP でバックエンドに送って span と LogRecord の相関を画面で�
 event-comparison/
 ├── main.go       # -fail / -span-events フラグ、終了コード
 ├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider
-├── fetch.go      # fetchUser：wide event のルート span・リトライ・例外の置き場
-├── store.go      # cache / DB の子 span と、診断用の普通のログ
+├── fetch.go      # fetchUser：メイン span のリクエスト文脈・リトライ・例外の置き場
+├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ
 └── events.go     # event を Logs API / span event で書く 2 つの実装
 ```

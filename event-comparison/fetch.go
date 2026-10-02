@@ -27,11 +27,12 @@ type request struct {
 	NewProfile bool // feature flag: 新しいプロフィール画面
 }
 
-// startAttributes は開始時に分かる文脈を返す。
+// startAttributes は開始時に分かるリクエスト文脈を返す。
 //
-// wide event の考え方では、何に使うか分からなくても関係しそうな文脈は全部載せておく。
-// 障害調査のときに、事前に用意していない組み合わせ(例: OS のバージョン × アプリのバージョン)で
-// 絞り込めるようにするため。cardinality が高い値(user.id など)も避けない。
+// wide event の考え方では、span 1 本を 1 行、属性を列とみなし、何に使うか分からなくても
+// 関係しそうな文脈は全部載せておく。障害調査のときに、事前に用意していない組み合わせ
+// (例: OS のバージョン × アプリのバージョン)で絞り込めるようにするため。
+// cardinality が高い値(user.id など)も避けない。
 func (r request) startAttributes() []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String("user.id", r.UserID),
@@ -53,8 +54,10 @@ type userService struct {
 
 // fetchUser は cache を引き、miss なら DB をリトライ付きで引く。
 //
-// この span がリクエスト 1 件分の wide event になる。開始時に分かる文脈と、
-// 終わるまで分からない結果(cache.hit や DB の呼び出し回数・合計時間)をすべてこの span に集める。
+// どの span も wide event の 1 行として属性(列)を太らせる。このメイン span には
+// リクエスト全体の文脈(開始時に分かるものと、cache.hit や DB の呼び出し回数・合計時間など
+// 終わるまで分からない結果)を載せ、子 span(store.go)にはその操作固有の属性を載せる。
+// 別々の span にある属性は同時に条件にできないので、集計軸にしたい属性は同じ span に載せる。
 //
 // それ以外の置き場は semconv の Events ガイダンスに従って選んでいる。
 //
@@ -101,7 +104,7 @@ func (s *userService) fetchUser(ctx context.Context, req request) (name string, 
 
 	for attempt := 1; ; attempt++ {
 		start := time.Now()
-		name, err = s.db.selectUser(ctx, req.UserID)
+		name, err = s.db.selectUser(ctx, req.UserID, attempt)
 		dbCalls++
 		dbDuration += time.Since(start)
 		if err == nil || attempt == maxAttempts {
