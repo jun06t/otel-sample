@@ -42,7 +42,16 @@ func run() int {
 	}
 
 	// エラーの記録は fetchUser の中で済んでいる。ここでは終了コードにだけ反映する。
-	_, fetchErr := s.fetchUser(ctx, "alice")
+	_, fetchErr := s.fetchUser(ctx, request{
+		UserID:     "alice",
+		Country:    "JP",
+		Plan:       "premium",
+		OSName:     "Android",
+		OSVersion:  "14",
+		AppName:    "ExampleApp",
+		AppVersion: "2.3.1",
+		NewProfile: true,
+	})
 
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
