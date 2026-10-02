@@ -1,20 +1,35 @@
-# event-comparison — span / span 属性 / event / 普通のログの置き場を選び分ける
+# event-comparison — ルート span を wide event にし、残りの置き場を選び分ける
 
-参照: [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
+参照: [All you need is Wide Events, not "Metrics, Logs and Traces"](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics) / [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
 
 「ユーザー取得 → cache miss → DB クエリを最大 3 回リトライ」という 1 つの処理で、
-記録したいものごとに置き場を選び分けるサンプル。stdout exporter で出力するので、
+ルート span をリクエスト 1 件分の **wide event** にし、それ以外は記録したいものごとに
+置き場を選び分けるサンプル。stdout exporter で出力するので、
 バックエンドなしで **何がどの信号に・どの形で載るか**を確認できる。
+
+## ルート span を wide event にする
+
+wide event は、1 件の処理について、関係しそうな文脈を何に使うか分からなくても全部載せた
+フラットなキーと値の集まり。障害調査のときに、事前に用意していない組み合わせ
+（例: OS のバージョン × アプリのバージョン）で絞り込み・グループ化して原因を探せる（unknown unknowns）。
+cardinality が高い値（`user.id` など）も避けない。OTel では span が一番近い概念なので、ルート span の属性に集める。
+
+| タイミング | 属性 | 渡し方 |
+|---|---|---|
+| 開始時に分かる文脈 | `user.id`、`user_agent.name` / `user_agent.version`（アプリ）、`user_agent.os.name` / `user_agent.os.version`、`app.user.country`、`app.user.plan`、`app.feature.new_profile` | `tracer.Start` の `trace.WithAttributes` |
+| 終わるまで分からない結果 | `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、失敗時は `error.type` | 終了時の `defer` で `SetAttributes` |
+
+開始時に分かるものを開始時に渡すのは、sampler が判断に使えるのが span 作成時にある属性だけだから。
 
 ## 置き場の選び方
 
-OTel の semconv（Events）の指針に従っている。「wide event」という用語は OTel の公式用語ではなく、
-ここでは「操作全体の性質を span 属性に集約する」ことに当たる。
+wide event 以外の置き場は、OTel の semconv（Events）の指針に従っている。
+「wide event」は OTel の公式用語ではないが、この表では「操作全体の性質 → span 属性」をルート span で徹底したものに当たる。
 
 | 記録したいもの | 置き場 | このサンプルでの例 |
 |---|---|---|
 | 区間と境界がある操作 | span | `fetch user`、子 span の `cache get`、`SELECT users` |
-| 操作全体の性質で、独自の時刻が不要 | span 属性 | `user.id`、`cache.hit`、`retry.count`、`error.type` |
+| 操作全体の性質で、独自の時刻が不要 | span 属性 | ルート span の wide event の属性（上の表） |
 | 名前の付いた時点の出来事（0 回以上起き、その回の時刻・severity・属性が要る） | event（EventName 付き LogRecord） | `db.query.retry`、`user.fetch.exception` |
 | 名前で引かない診断メッセージ | 普通の LogRecord（EventName なし） | `connection pool exhausted: ...` |
 
@@ -47,7 +62,12 @@ LogRecord            EventName=db.query.retry  WARN  Body="db query timeout"  re
   （2 回目の SELECT users と db.query.retry も同様）
 Span "SELECT users"  （3 回目）status=Error
 LogRecord            EventName=user.fetch.exception  ERROR  Body="db query timeout"  exception.type=..., exception.message=..., exception.stacktrace=...
-Span "fetch user"    status=Error  user.id=alice, cache.hit=false, retry.count=2, error.type=*main.DBTimeoutError
+Span "fetch user"    status=Error
+                     user.id=alice, user_agent.name=ExampleApp, user_agent.version=2.3.1,
+                     user_agent.os.name=Android, user_agent.os.version=14,
+                     app.user.country=JP, app.user.plan=premium, app.feature.new_profile=true,
+                     cache.hit=false, retry.count=2, app.db.call.count=3, app.db.duration_ms=63,
+                     error.type=*main.DBTimeoutError
 ```
 
 - 診断ログは `SELECT users` の span に、event は `fetch user` の span に、trace_id / span_id で紐づく
@@ -57,7 +77,7 @@ Span "fetch user"    status=Error  user.id=alice, cache.hit=false, retry.count=2
 `-span-events` の場合、event だけが LogRecord ではなく `fetch user` span の Events に入る。
 
 ```
-Span "fetch user"  status=Error  user.id=alice, cache.hit=false, retry.count=2, error.type=*main.DBTimeoutError
+Span "fetch user"  status=Error  user.id=alice, ...（wide event の属性は同じ）
   Events:
     db.query.retry  retry.attempt=2, retry.backoff_ms=10, error.type=...
     db.query.retry  retry.attempt=3, retry.backoff_ms=20, error.type=...
@@ -77,7 +97,7 @@ span event には severity も Body もないので、retry の severity とメ�
 - **`cache.hit` は span 属性**：cache を引くのは 1 回だけで、独自の時刻も要らない。区間は `cache get` 子 span が持つ
 - **`retry.count` は span 属性、`db.query.retry` は event**：何回リトライしたかは操作全体の性質。一方、各リトライの判断は 0 回以上起き、その回の待ち時間（`retry.backoff_ms`）を持つ時点の出来事
 - **例外は event**：semconv に従い、EventName を「操作名 + `.exception`」にする。失敗の事実は span の status と `error.type` に分ける
-- **`user.id` は span 開始時に渡す**：開始時に分かる属性は `tracer.Start` で渡す。sampler が判断に使えるのは span 作成時にある属性だけなので、終了時に書く属性は sampling に効かない
+- **文脈はルート span に全部載せる**：何に使うか分からなくても載せておくと、後から任意の組み合わせで絞り込める。`app.db.call.count` のように `retry.count` から計算できる値も、そのまま集計に使えるよう重ねて載せる
 - **診断メッセージは普通のログ**：名前で引く想定がないので EventName を付けない
 - **エラーメッセージは Body に入れる**：`error.message` 属性は非推奨。log-based event の識別も、非推奨の `event.name` 属性ではなく EventName フィールドで行う
 
@@ -85,8 +105,10 @@ span event には severity も Body もないので、retry の severity とメ�
 
 | 属性 | 種類 |
 |---|---|
-| `error.type`, `exception.*`, `user.id`, `db.system.name`, `db.operation.name`, `db.collection.name` | semconv の標準属性 |
-| `cache.key`, `cache.hit`, `retry.count`, `retry.attempt`, `retry.backoff_ms` | このサンプル独自の属性 |
+| `error.type`, `exception.*`, `user.id`, `user_agent.*`, `db.system.name`, `db.operation.name`, `db.collection.name` | semconv の標準属性（`user_agent.name` などは Development） |
+| `app.*`, `cache.key`, `cache.hit`, `retry.count`, `retry.attempt`, `retry.backoff_ms` | このサンプル独自の属性 |
+
+国やプランのように semconv に適切な名前がない文脈は、将来の semconv と衝突しないよう `app.` を付けている。
 
 `error.type` には Go の型名（`%T`）を使い、`RecordError` が付ける `exception.type` とそろえている。
 `retry.attempt` は、これから行う試行の番号（2 回目なら 2）。
@@ -99,7 +121,7 @@ OTLP でバックエンドに送って span と LogRecord の相関を画面で�
 event-comparison/
 ├── main.go       # -fail / -span-events フラグ、終了コード
 ├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider
-├── fetch.go      # fetchUser：span 属性・リトライ・例外の置き場
+├── fetch.go      # fetchUser：wide event のルート span・リトライ・例外の置き場
 ├── store.go      # cache / DB の子 span と、診断用の普通のログ
 └── events.go     # event を Logs API / span event で書く 2 つの実装
 ```
