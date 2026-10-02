@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// spanName はユーザー取得処理を表す span 名。
+// HTTP server span ではないので、HTTP の semconv に従った名前にはしない。
+const spanName = "fetch user"
+
 // maxAttempts は DB クエリの最大試行回数。
 const maxAttempts = 3
 
@@ -16,6 +20,12 @@ type DBTimeoutError struct {
 
 func (e *DBTimeoutError) Error() string {
 	return fmt.Sprintf("db query timeout (attempt %d)", e.Attempt)
+}
+
+// errorType は error.type / exception.type に入れる値を返す。
+// span.RecordError が付ける exception.type と同じく、Go の型名を使う。
+func errorType(err error) string {
+	return fmt.Sprintf("%T", err)
 }
 
 func cacheKey(userID string) string {

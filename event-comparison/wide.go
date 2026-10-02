@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -13,7 +12,7 @@ import (
 // 出力は span 1 本だけ。cache miss や retry は「いつ起きたか」ではなく
 // 「何回起きたか」として属性に残り、属性で slice & dice できる。
 func wideEvent(ctx context.Context, userID string, fail bool) (err error) {
-	ctx, span := tracer.Start(ctx, "GET /users/{id}")
+	ctx, span := tracer.Start(ctx, spanName)
 	defer span.End()
 
 	var cacheMisses, retries int
@@ -28,7 +27,7 @@ func wideEvent(ctx context.Context, userID string, fail bool) (err error) {
 		if err != nil {
 			// 失敗の事実は status と error.type で表す。
 			span.SetStatus(codes.Error, "fetch user failed")
-			span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
+			span.SetAttributes(attribute.String("error.type", errorType(err)))
 		}
 	}()
 

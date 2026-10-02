@@ -10,12 +10,12 @@ import (
 
 // spanEvent は起きた瞬間を span.AddEvent で親 span に注釈する。
 //
-// 出力は span 1 本で、その Events 配列に cache.miss / retry / exception が並ぶ。
-// OTel は 2026-03 に仕様として Span Event API(Go では AddEvent / RecordError)を
-// deprecated とし、時点の出来事は log-based event(logevent.go)へ移行する方針。
-// ただし Go SDK v1.44 の時点では、これらのメソッドに Deprecated 表記はまだ付いていない。
+// 出力は span 1 本で、その Events 配列に cache.miss / db.query.retry / exception が並ぶ。
+// OTel は 2026-03 に Span Event API(Go では AddEvent / RecordError)を段階的に
+// 非推奨にする方針を発表し、新しいイベントには Logs API(logevent.go)を推奨している。
+// Go SDK v1.45 の時点では、これらのメソッドに Deprecated 表記はまだ付いていない。
 func spanEvent(ctx context.Context, userID string, fail bool) error {
-	ctx, span := tracer.Start(ctx, "GET /users/{id}",
+	ctx, span := tracer.Start(ctx, spanName,
 		trace.WithAttributes(attribute.String("user.id", userID)),
 	)
 	defer span.End()
@@ -33,14 +33,17 @@ func spanEvent(ctx context.Context, userID string, fail bool) error {
 		}
 		if attempt == maxAttempts {
 			// "exception" という名前の span event になる。
-			span.RecordError(err)
+			span.RecordError(err, trace.WithStackTrace(true))
+			// 失敗の事実は status と error.type で表す。
 			span.SetStatus(codes.Error, "fetch user failed")
+			span.SetAttributes(attribute.String("error.type", errorType(err)))
 			return err
 		}
-		span.AddEvent("retry",
+		// リトライで回復しうるエラーなので、span の status は変えない。
+		span.AddEvent("db.query.retry",
 			trace.WithAttributes(
 				attribute.Int("retry.attempt", attempt),
-				attribute.String("error.message", err.Error()),
+				attribute.String("error.type", errorType(err)),
 			),
 		)
 	}
