@@ -24,22 +24,20 @@ func run() int {
 	spanEvents := flag.Bool("span-events", false, "event を Logs API ではなく span event(AddEvent / RecordError)で記録する")
 	flag.Parse()
 
-	ctx := context.Background()
-	shutdown, err := setupTelemetry(ctx)
+	tel, err := newTelemetry()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup telemetry: %v\n", err)
 		return 1
 	}
+	tracer, logger := tel.tracer(), tel.logger()
 
-	var events eventRecorder = logEvents{}
+	var events eventRecorder = newLogEventRecorder(logger)
 	if *spanEvents {
-		events = spanEventRecorder{}
+		events = newSpanEventRecorder()
 	}
-	s := &userService{
-		cache:  &cache{},
-		db:     &userDB{fail: *fail},
-		events: events,
-	}
+	s := newUserService(tracer, newCache(tracer), newUserDB(tracer, logger, *fail), events)
+
+	ctx := context.Background()
 
 	// HTTP サーバーなら middleware が行う処理。テレメトリーの次元だけを context に入れ、
 	// 処理の入力である user ID は引数で渡す。
@@ -58,7 +56,7 @@ func run() int {
 
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := shutdown(sctx); err != nil {
+	if err := tel.shutdown(sctx); err != nil {
 		fmt.Fprintf(os.Stderr, "shutdown telemetry: %v\n", err)
 	}
 

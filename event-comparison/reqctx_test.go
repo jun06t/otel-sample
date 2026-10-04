@@ -49,7 +49,7 @@ func TestRequestInfoProcessor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := tracetest.NewSpanRecorder()
 			tp := sdktrace.NewTracerProvider(
-				sdktrace.WithSpanProcessor(requestInfoProcessor{}),
+				sdktrace.WithSpanProcessor(newRequestInfoProcessor()),
 				sdktrace.WithSpanProcessor(rec),
 			)
 			tr := tp.Tracer("test")

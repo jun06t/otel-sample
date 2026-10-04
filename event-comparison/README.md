@@ -177,10 +177,15 @@ OTLP でバックエンドに送って span と LogRecord の相関を画面で�
 
 ```
 event-comparison/
-├── main.go       # -fail / -span-events フラグ、リクエスト文脈の組み立て、終了コード
-├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider
-├── reqctx.go     # リクエスト文脈の context と、全 span に付ける SpanProcessor
+├── main.go       # -fail / -span-events フラグ、依存の組み立て、リクエスト文脈の組み立て、終了コード
+├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider と、そこから取り出す tracer / logger
+├── reqctx.go     # リクエスト文脈の context と、ルート span に付ける SpanProcessor
 ├── fetch.go      # fetchUser：メイン span の入力と結果・リトライ・例外の置き場
-├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ
-└── events.go     # event を Logs API / span event で書く 2 つの実装
+├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ、ctx 対応の待ち処理
+└── events.go     # event を Logs API / span event で書く 2 つの実装（eventRecorder）
 ```
+
+tracer / logger はパッケージ変数に置かず、`telemetry` から取り出して各構造体のコンストラクタ
+（`newUserService`、`newCache`、`newUserDB`、`newLogEventRecorder`）で渡している。
+依存が型から読め、テストでは no-op の provider に差し替えられる（`cancel_test.go`）。
+待ち処理は `ctx` のキャンセルに従い、キャンセルされたらすぐ `ctx.Err()` を返す。
