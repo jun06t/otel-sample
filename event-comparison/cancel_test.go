@@ -13,7 +13,7 @@ import (
 func TestFetchUserStopsOnCancel(t *testing.T) {
 	tracer := tracenoop.NewTracerProvider().Tracer("test")
 	logger := noop.NewLoggerProvider().Logger("test")
-	s := newUserService(tracer, newCache(tracer), newUserDB(tracer, logger, true), newLogEventRecorder(logger))
+	s := newUserService(tracer, newCache(tracer, false), newUserDB(tracer, logger, maxAttempts), newLogEventRecorder(logger))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()

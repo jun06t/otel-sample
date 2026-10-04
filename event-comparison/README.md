@@ -102,9 +102,66 @@ go run . -fail -span-events   # 同じ event を span event で記録する
 |---|---|---|
 | `-fail` | `false` | DB クエリをリトライ上限まで失敗させる |
 | `-span-events` | `false` | event を Logs API ではなく span event（`AddEvent` / `RecordError`）で記録する |
+| `-requests` | `1` | 送るリクエスト数。`1` なら毎回同じ 1 リクエスト、2 以上なら文脈をばらつかせる、`0` なら止めるまで送り続ける |
+| `-interval` | `0` | リクエストの間隔 |
+| `-seed` | `1` | 文脈をばらつかせる乱数のシード |
 
-traces / logs とも同期 export（`WithSyncer` / `SimpleProcessor`）にしているので、
-LogRecord は Emit した瞬間に、span は End した瞬間に出力される。
+| 環境変数 | 説明 |
+|---|---|
+| `EXPORTER_ENDPOINT` | 設定すると OTLP gRPC でそこへ送る（例: `localhost:4317`）。未設定なら stdout に出す |
+
+stdout に出すときは、traces / logs とも同期 export（`SimpleSpanProcessor` / `SimpleProcessor`）にしているので、
+LogRecord は Emit した瞬間に、span は End した瞬間に出力される。OTLP で送るときは本番と同じくバッチで送る。
+
+`-requests 1` のときだけ、失敗したら終了コード 1 を返す。2 件以上送るときは、最後に `sent=... failed=...` を出して 0 で終わる。
+
+## SigNoz で見る
+
+traces と logs を同じストア（ClickHouse）に入れる SigNoz に送ると、wide event の属性で絞り込み・グループ化できる。
+Jaeger はトレース専用で logs 信号を受け取らず、属性での集計もできないので、このサンプルには向かない。
+
+1. SigNoz を起動する（手順は [`../signoz-wide-event`](../signoz-wide-event) の README。`foundryctl cast -f casting.yaml`）
+2. サンプルを起動する。文脈をばらつかせたリクエストを 200ms ごとに送り続ける
+
+   ```bash
+   docker compose up -d --build
+   # またはローカルから
+   EXPORTER_ENDPOINT=localhost:4317 go run . -requests=0 -interval=200ms
+   ```
+
+3. <http://localhost:8080> を開く
+
+### 仕込んだ不具合を探す
+
+`loadgen.go` は、**Android 14 × アプリ 2.3.1 の組み合わせだけ DB がタイムアウトしやすい**ようにしている
+（アプリのコードはこの条件を知らない）。SigNoz の Traces Explorer で `fetch user` span のエラー数を
+`user_agent.os.version` や `user_agent.version` でグループ化すると、この組み合わせが浮かび上がる。
+
+同じ集計を ClickHouse で直接行うとこうなる（300 リクエストを送った例）。
+
+```sql
+SELECT attributes_string['user_agent.os.name'] AS os,
+       attributes_string['user_agent.os.version'] AS osv,
+       attributes_string['user_agent.version'] AS app,
+       count() AS n, countIf(has_error) AS err, round(100 * err / n) AS pct
+FROM signoz_traces.distributed_signoz_index_v3
+WHERE resource_string_service$$name = 'event-comparison' AND name = 'fetch user'
+GROUP BY os, osv, app ORDER BY pct DESC LIMIT 3
+```
+
+```
+┌─os──────┬─osv─┬─app───┬──n─┬─err─┬─pct─┐
+│ Android │ 14  │ 2.3.1 │ 22 │   7 │  32 │
+│ iOS     │ 18  │ 2.4.0 │ 21 │   1 │   5 │
+│ iOS     │ 17  │ 2.4.0 │ 25 │   1 │   4 │
+└─────────┴─────┴───────┴────┴─────┴─────┘
+```
+
+> [!warning] SigNoz は LogRecord の EventName を保存しない
+> OTLP の exporter は EventName を送っているが、手元で確認した SigNoz（`signoz/signoz-otel-collector:latest`、2026-07-14 ビルド）の
+> ログのテーブル（`signoz_logs.logs_v2`）には EventName の列がなく、捨てられる。そのため SigNoz 上では、
+> `db.query.retry` や `user.fetch.exception` の log-based event と、EventName なしの診断ログを名前で区別できない。
+> Body・severity・属性と trace_id / span_id は保存されるので、span からログへの移動はできる。
 
 ## 出力（`-fail` の場合、要点のみ）
 
@@ -171,18 +228,21 @@ span event には severity も Body もないので、retry の severity とメ�
 `error.type` には Go の型名（`%T`）を使い、`RecordError` が付ける `exception.type` とそろえている。
 `retry.attempt` は、これから行う試行の番号（2 回目なら 2）。
 
-OTLP でバックエンドに送って span と LogRecord の相関を画面で見る例は [`../signoz-wide-event`](../signoz-wide-event) を参照。
+zap のログを otelzap 経由で SigNoz に送る例は [`../signoz-wide-event`](../signoz-wide-event) を参照。
 
 ## ファイル構成
 
 ```
 event-comparison/
-├── main.go       # -fail / -span-events フラグ、依存の組み立て、リクエスト文脈の組み立て、終了コード
-├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider と、そこから取り出す tracer / logger
+├── main.go       # フラグ、依存の組み立て、リクエストを送るループ、終了コード
+├── telemetry.go  # stdout / OTLP の TracerProvider / LoggerProvider と、そこから取り出す tracer / logger
+├── loadgen.go    # 1 リクエストぶんの条件（文脈、cache・DB の振る舞い）と、仕込んだ不具合
 ├── reqctx.go     # リクエスト文脈の context と、ルート span に付ける SpanProcessor
 ├── fetch.go      # fetchUser：メイン span の入力と結果・リトライ・例外の置き場
 ├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ、ctx 対応の待ち処理
-└── events.go     # event を Logs API / span event で書く 2 つの実装（eventRecorder）
+├── events.go     # event を Logs API / span event で書く 2 つの実装（eventRecorder）
+├── Dockerfile
+└── docker-compose.yml  # SigNoz のネットワークに参加して OTLP で送り続ける
 ```
 
 tracer / logger はパッケージ変数に置かず、`telemetry` から取り出して各構造体のコンストラクタ

@@ -6,6 +6,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/log"
@@ -23,12 +25,13 @@ type telemetry struct {
 	loggerProvider *sdklog.LoggerProvider
 }
 
-// newTelemetry は traces と logs を stdout に出す provider を作る。
+// newTelemetry は traces と logs の provider を作る。
 //
-// 出力の並びで「いつ・どの信号に載るか」を見せたいので、どちらも同期で export する。
-// LogRecord は Emit した瞬間に、span は End した瞬間に出力される。
-// (WithSyncer / SimpleProcessor は本番向けではない。本番は Batch を使う)
-func newTelemetry() (*telemetry, error) {
+// endpoint が空なら stdout に出す。出力の並びで「いつ・どの信号に載るか」を見せたいので、
+// どちらも同期で export する(LogRecord は Emit した瞬間に、span は End した瞬間に出力される)。
+//
+// endpoint があれば、OTLP gRPC で SigNoz などのバックエンドに送る。こちらは本番と同じくバッチで送る。
+func newTelemetry(ctx context.Context, endpoint string) (*telemetry, error) {
 	// resource.Default() の telemetry.sdk.* 属性を残したまま service.name を足す。
 	res, err := resource.Merge(
 		resource.Default(),
@@ -38,23 +41,48 @@ func newTelemetry() (*telemetry, error) {
 		return nil, err
 	}
 
-	te, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
-	if err != nil {
-		return nil, err
+	var (
+		spanProcessor sdktrace.SpanProcessor
+		logProcessor  sdklog.Processor
+	)
+	if endpoint == "" {
+		te, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if err != nil {
+			return nil, err
+		}
+		le, err := stdoutlog.New(stdoutlog.WithPrettyPrint())
+		if err != nil {
+			return nil, err
+		}
+		spanProcessor = sdktrace.NewSimpleSpanProcessor(te)
+		logProcessor = sdklog.NewSimpleProcessor(le)
+	} else {
+		te, err := otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(endpoint),
+			otlptracegrpc.WithInsecure(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		le, err := otlploggrpc.New(ctx,
+			otlploggrpc.WithEndpoint(endpoint),
+			otlploggrpc.WithInsecure(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		spanProcessor = sdktrace.NewBatchSpanProcessor(te)
+		logProcessor = sdklog.NewBatchProcessor(le)
 	}
+
 	tp := sdktrace.NewTracerProvider(
 		// context のリクエスト文脈を、このサービスのルート span に属性として付ける。
 		sdktrace.WithSpanProcessor(newRequestInfoProcessor()),
-		sdktrace.WithSyncer(te),
+		sdktrace.WithSpanProcessor(spanProcessor),
 		sdktrace.WithResource(res),
 	)
-
-	le, err := stdoutlog.New(stdoutlog.WithPrettyPrint())
-	if err != nil {
-		return nil, err
-	}
 	lp := sdklog.NewLoggerProvider(
-		sdklog.WithProcessor(sdklog.NewSimpleProcessor(le)),
+		sdklog.WithProcessor(logProcessor),
 		sdklog.WithResource(res),
 	)
 

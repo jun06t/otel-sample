@@ -1,0 +1,19 @@
+services:
+  app:
+    build:
+      context: .
+    # 文脈をばらつかせたリクエストを、止めるまで 200ms ごとに送り続ける。
+    command: ["-requests=0", "-interval=200ms"]
+    environment:
+      # SigNoz が内蔵する OTel Collector(ingester) の OTLP gRPC。
+      # 下の signoz ネットワークに相乗りし、コンテナ名で直接届ける。
+      - EXPORTER_ENDPOINT=signoz-ingester:4317
+    networks:
+      - signoz
+
+networks:
+  # foundry で起動した SigNoz が作る外部ネットワーク。
+  # 名前が異なる場合は `docker network ls` で確認して合わせる。
+  signoz:
+    external: true
+    name: signoz-network
