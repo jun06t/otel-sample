@@ -1,18 +1,23 @@
-# event-comparison — span を wide event として太らせ、残りの置き場を選び分ける
+# event-comparison — span を wide event にし、残りの置き場を選び分ける
 
 参照: [Observability 1.0 と Observability 2.0](https://christina04.hatenablog.com/entry/observability_2_0) / [All you need is Wide Events, not "Metrics, Logs and Traces"](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics) / [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
 
 「ユーザー取得 → cache miss → DB クエリを最大 3 回リトライ」という 1 つの処理で、
-すべての span を **wide event**（高次元・高カーディナリティな 1 行）として太らせ、
+すべての span を **wide event**（高次元・高カーディナリティな 1 行）にし、
 それ以外は記録したいものごとに置き場を選び分けるサンプル。stdout exporter で出力するので、
 バックエンドなしで **何がどの信号に・どの形で載るか**を確認できる。
 
-## span を wide event として太らせる
+## span を wide event にする
 
 span と聞くと、名前・所要時間・status と数個のタグを持つ Observability 1.0 のイメージになりがち。
 Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**とみなし、
-1 span あたり数十〜数百の列を持たせる。関係しそうな文脈は何に使うか分からなくても載せ、
+1 span あたり数十〜数百の列（dimensions）を持たせる。関係しそうな文脈は何に使うか分からなくても属性として足し、
 `user.id` のような cardinality が高い値も避けない。
+
+Honeycomb はこれを "arbitrarily wide structured event" と呼び、"dozens to hundreds of dimensions per event" を持つもの、
+と説明している（[Structured Events Are the Basis of Observability](https://www.honeycomb.io/blog/structured-events-basis-observability)）。
+OTel の span との関係は、ドキュメントで "attach contextual information to the spans"（span に文脈を属性として付ける）と表現している
+（[Add Custom Instrumentation](https://docs.honeycomb.io/send-data/standardize/add-custom-instrumentation)）。
 
 `go run . -fail` の 1 トレースを表にすると次のようになる（空欄はその span に無い列）。
 
@@ -24,7 +29,8 @@ Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**
 | SELECT users | Error | | | | | | | 2 | 0 | DBTimeoutError | … |
 | SELECT users | Error | | | | | | | 3 | 0 | DBTimeoutError | … |
 
-- **メイン span（`fetch user`）にはリクエスト文脈**：開始時に分かる `user.id`、`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
+- **リクエスト文脈はルート span に**：`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は context に入れ、`requestInfoProcessor` がルート span の `fetch user` に付ける（後述）
+- **メイン span（`fetch user`）には処理の入力と結果**：処理の入力である `user.id` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
 - **子 span にはその操作固有の文脈**：`cache get` には `cache.key` / `cache.hit`、`SELECT users` には `db.*`、`db.client.connection.pool.name`、試行番号 `app.db.attempt`、プールの状態 `app.db.pool.in_use` / `app.db.pool.idle`、成功時の `db.response.returned_rows`
 
 これを Honeycomb や SigNoz（ClickHouse）のようなバックエンドに入れると、事前にメトリクスを定義しなくても、
@@ -40,14 +46,39 @@ WHERE span.name = "SELECT users" GROUP BY app.db.pool.idle
 
 > [!note] 集計軸にしたい列は同じ span に載せる
 > 別々の span にある列は、同時に条件にできない。たとえば `WHERE span.name = "SELECT users" AND app.user.plan = "premium"` は、
-> `app.user.plan` が `fetch user` にしか無いので 0 件になる。プランごとに DB の遅さを見たいなら、`SELECT users` にもプランを載せる必要がある。
+> `app.user.plan` が `fetch user` にしか無いので 0 件になる。
+> リクエスト文脈を子 span にも付ければ解消できるが、そのぶんデータ量が増える。このサンプルはルート span だけに付けている。
 
-開始時に分かるものを開始時に渡すのは、sampler が判断に使えるのが span 作成時にある属性だけだから。
+## リクエスト文脈を context で渡す
+
+Go の `context` のドキュメントは「context の値は、プロセスや API をまたぐリクエスト単位のデータにだけ使い、
+関数のオプション引数の受け渡しには使わない」としている。そこで、リクエストの情報を使い道で分けている。
+
+| 情報 | 使い道 | 渡し方 |
+|---|---|---|
+| user ID | DB の検索キーとして処理に使う | 引数（`fetchUser(ctx, "alice")`）。入力が context に隠れると、関数のシグネチャから依存が読めなくなる |
+| OS、アプリのバージョン、国、プラン、feature flag の評価結果 | テレメトリーの次元にしか使わない | context（`withRequestInfo`）。どの層の span にも付けたい横断的な情報だから |
+
+- context のキーは、パッケージ間の衝突を避けるため外から見えない独自型（`requestInfoKey struct{}`）にし、`withRequestInfo` / `requestInfoFrom` からだけ触る
+- context の値は変えない。`cache.hit` や `retry.count` のように処理の途中で変わる値は context に入れない
+- `requestInfoProcessor` は SDK の `SpanProcessor` で、`OnStart` で context から取り出して span に付ける。各関数は requestInfo を意識しなくてよい
+- `OnStart` は子 span を含むすべての span で 1 回ずつ呼ばれるが、属性を付けるのは**このサービスのルート span**（親 span がいない、または親が別プロセスにいる span）だけにしている。HTTP サーバーでは上流から trace context が伝播されてくるので、「親がいない」だけで判定すると入口の span にも付かなくなる
+- HTTP サーバーなら、`withRequestInfo` は middleware で呼ぶ。User-Agent、アクセストークンのクレーム、geo ヘッダーなどから組み立てる（このサンプルは CLI なので `main.go` で直接作っている）
+
+> [!note] sampling との関係
+> sampler が判断に使えるのは span 作成時にある属性だけ。`OnStart` は sampler の判断の後に、記録される span に対してだけ呼ばれるので、
+> `requestInfoProcessor` が付けた属性は head sampling には使えない（Collector の tail sampling なら使える）。
+> `user.id` を `tracer.Start` で渡しているのは、作成時の属性として sampler に見せるため。
+
+> [!note] 下流のサービスにも伝える場合
+> context の値はプロセス内にしか届かない。下流のサービスの span にも同じ列を付けたいなら、OTel の Baggage に入れ、
+> contrib の `baggagecopy.NewSpanProcessor(filter)` で span の属性にコピーする。
+> ただし Baggage は HTTP ヘッダーで下流（外部サービスを含む）にそのまま流れるので、個人情報は入れず filter で絞る。
 
 ## 置き場の選び方
 
 wide event 以外の置き場は、OTel の semconv（Events）の指針に従っている。
-「wide event」は OTel の公式用語ではなく、この表のどこか 1 行に当たるものでもない。span（と span 属性）をどう太らせるかという粒度の捉え方。
+「wide event」は OTel の公式用語ではなく、この表のどこか 1 行に当たるものでもない。span にどれだけの文脈（dimensions）を持たせるかという粒度の捉え方。
 
 | 記録したいもの | 置き場 | このサンプルでの例 |
 |---|---|---|
@@ -146,9 +177,10 @@ OTLP でバックエンドに送って span と LogRecord の相関を画面で�
 
 ```
 event-comparison/
-├── main.go       # -fail / -span-events フラグ、終了コード
+├── main.go       # -fail / -span-events フラグ、リクエスト文脈の組み立て、終了コード
 ├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider
-├── fetch.go      # fetchUser：メイン span のリクエスト文脈・リトライ・例外の置き場
+├── reqctx.go     # リクエスト文脈の context と、全 span に付ける SpanProcessor
+├── fetch.go      # fetchUser：メイン span の入力と結果・リトライ・例外の置き場
 ├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ
 └── events.go     # event を Logs API / span event で書く 2 つの実装
 ```

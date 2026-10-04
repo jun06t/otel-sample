@@ -89,7 +89,7 @@ emitEvent(ctx, h.events, "order.failed", otellog.SeverityError,
 どちらも ctx の span から `trace_id`/`span_id` が自動で紐づき、SigNoz 上でその span と同じ画面に並びます。
 
 > なお `event.name` を持つ LogRecord が「log-based event」で、これは wide event（= span 属性）とは
-> 別物です。wide event は traces 信号（span を太らせる）、log-based event は logs 信号（時点の出来事）。
+> 別物です。wide event は traces 信号（span に文脈を属性として足す）、log-based event は logs 信号（時点の出来事）。
 
 ### zap → OTLP（`logger.go`）
 
