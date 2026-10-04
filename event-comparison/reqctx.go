@@ -52,10 +52,15 @@ func (i requestInfo) attributes() []attribute.KeyValue {
 	}
 }
 
-// requestInfoProcessor は、context に入っている requestInfo を、開始するすべての span に属性として付ける。
+// requestInfoProcessor は、context に入っている requestInfo を、このサービスのルート span に属性として付ける。
+// 各関数は requestInfo を意識しなくてよい。
 //
-// 子 span にも同じ列が付くので、「SELECT users をプラン別に集計する」のような
-// 同じ span の中での絞り込みができる。各関数は requestInfo を意識しなくてよい。
+// OnStart は子 span を含むすべての span で 1 回ずつ呼ばれるが、属性を付けるのはルート span だけにしている。
+// リクエスト文脈は 1 リクエストに 1 回あれば足り、全 span に付けるとその分だけデータ量が増えるため。
+// その代わり、子 span(SELECT users など)をリクエスト文脈で絞り込むことはできない。
+//
+// ルート span は「親 span がいない、または親が別プロセスにいる」span とする。HTTP サーバーでは
+// 上流から trace context が伝播されてくるので、親がいないかだけで判定すると入口の span にも付かなくなる。
 //
 // OnStart は sampler の判断の後に、記録される span に対してだけ呼ばれる。
 // ここで付けた属性は head sampling の判断には使えない(tail sampling なら使える)。
@@ -64,6 +69,10 @@ type requestInfoProcessor struct{}
 var _ sdktrace.SpanProcessor = requestInfoProcessor{}
 
 func (requestInfoProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
+	if p := s.Parent(); p.IsValid() && !p.IsRemote() {
+		// 同じプロセスに親がいる子 span には付けない。
+		return
+	}
 	if info, ok := requestInfoFrom(parent); ok {
 		s.SetAttributes(info.attributes()...)
 	}

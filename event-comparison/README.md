@@ -19,12 +19,12 @@ Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**
 | span.name | status | user.id | user_agent.os.version | user_agent.version | app.user.plan | cache.hit | retry.count | app.db.attempt | app.db.pool.idle | error.type | … |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | fetch user | Error | alice | 14 | 2.3.1 | premium | false | 2 | | | DBTimeoutError | … |
-| cache get | Unset | | 14 | 2.3.1 | premium | false | | | | | … |
-| SELECT users | Error | | 14 | 2.3.1 | premium | | | 1 | 0 | DBTimeoutError | … |
-| SELECT users | Error | | 14 | 2.3.1 | premium | | | 2 | 0 | DBTimeoutError | … |
-| SELECT users | Error | | 14 | 2.3.1 | premium | | | 3 | 0 | DBTimeoutError | … |
+| cache get | Unset | | | | | false | | | | | … |
+| SELECT users | Error | | | | | | | 1 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | | | | | | 2 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | | | | | | 3 | 0 | DBTimeoutError | … |
 
-- **リクエスト文脈はすべての span に**：`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は context に入れ、`requestInfoProcessor` がすべての span に付ける（後述）
+- **リクエスト文脈はルート span に**：`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は context に入れ、`requestInfoProcessor` がルート span の `fetch user` に付ける（後述）
 - **メイン span（`fetch user`）には処理の入力と結果**：処理の入力である `user.id` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
 - **子 span にはその操作固有の文脈**：`cache get` には `cache.key` / `cache.hit`、`SELECT users` には `db.*`、`db.client.connection.pool.name`、試行番号 `app.db.attempt`、プールの状態 `app.db.pool.in_use` / `app.db.pool.idle`、成功時の `db.response.returned_rows`
 
@@ -37,12 +37,12 @@ WHERE span.name = "fetch user" GROUP BY user_agent.os.version, user_agent.versio
                                                         -- 未知の組み合わせでエラー率を切る
 WHERE span.name = "SELECT users" GROUP BY app.db.pool.idle
                                                         -- 子 span の列でも集計できる
-WHERE span.name = "SELECT users" GROUP BY app.user.plan SELECT p99(duration)
-                                                        -- 子 span をリクエスト文脈で切る
 ```
 
-別々の span にある列は同時に条件にできないので、集計軸にしたい列は同じ span に載せる必要がある。
-リクエスト文脈をすべての span に付けているのはそのため。
+> [!note] 集計軸にしたい列は同じ span に載せる
+> 別々の span にある列は、同時に条件にできない。たとえば `WHERE span.name = "SELECT users" AND app.user.plan = "premium"` は、
+> `app.user.plan` が `fetch user` にしか無いので 0 件になる。
+> リクエスト文脈を子 span にも付ければ解消できるが、そのぶんデータ量が増える。このサンプルはルート span だけに付けている。
 
 ## リクエスト文脈を context で渡す
 
@@ -57,6 +57,7 @@ Go の `context` のドキュメントは「context の値は、プロセスや 
 - context のキーは、パッケージ間の衝突を避けるため外から見えない独自型（`requestInfoKey struct{}`）にし、`withRequestInfo` / `requestInfoFrom` からだけ触る
 - context の値は変えない。`cache.hit` や `retry.count` のように処理の途中で変わる値は context に入れない
 - `requestInfoProcessor` は SDK の `SpanProcessor` で、`OnStart` で context から取り出して span に付ける。各関数は requestInfo を意識しなくてよい
+- `OnStart` は子 span を含むすべての span で 1 回ずつ呼ばれるが、属性を付けるのは**このサービスのルート span**（親 span がいない、または親が別プロセスにいる span）だけにしている。HTTP サーバーでは上流から trace context が伝播されてくるので、「親がいない」だけで判定すると入口の span にも付かなくなる
 - HTTP サーバーなら、`withRequestInfo` は middleware で呼ぶ。User-Agent、アクセストークンのクレーム、geo ヘッダーなどから組み立てる（このサンプルは CLI なので `main.go` で直接作っている）
 
 > [!note] sampling との関係

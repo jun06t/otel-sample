@@ -39,7 +39,7 @@ func setupTelemetry(ctx context.Context) (func(context.Context) error, error) {
 		return nil, err
 	}
 	tp := sdktrace.NewTracerProvider(
-		// context のリクエスト文脈を、すべての span に属性として付ける。
+		// context のリクエスト文脈を、このサービスのルート span に属性として付ける。
 		sdktrace.WithSpanProcessor(requestInfoProcessor{}),
 		sdktrace.WithSyncer(te),
 		sdktrace.WithResource(res),

@@ -24,7 +24,7 @@ type userService struct {
 //
 // どの span も wide event の 1 行として属性(列)を太らせる。
 //   - リクエスト文脈(OS、アプリのバージョン、プランなど)は context に入っており、
-//     requestInfoProcessor(reqctx.go)がすべての span に付ける
+//     requestInfoProcessor(reqctx.go)がルート span であるこの span に付ける
 //   - このメイン span には、処理の入力である user.id と、cache.hit や DB の呼び出し回数・
 //     合計時間など終わるまで分からない結果を載せる
 //   - 子 span(store.go)にはその操作固有の属性を載せる
