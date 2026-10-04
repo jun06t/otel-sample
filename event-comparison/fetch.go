@@ -15,9 +15,14 @@ import (
 const maxAttempts = 3
 
 type userService struct {
+	tracer trace.Tracer
 	cache  *cache
 	db     *userDB
 	events eventRecorder
+}
+
+func newUserService(tracer trace.Tracer, cache *cache, db *userDB, events eventRecorder) *userService {
+	return &userService{tracer: tracer, cache: cache, db: db, events: events}
 }
 
 // fetchUser は cache を引き、miss なら DB をリトライ付きで引く。
@@ -39,7 +44,7 @@ type userService struct {
 // 開始時に分かる属性は tracer.Start で渡す。sampler が判断に使えるのは
 // span 作成時にある属性だけなので、後から SetAttributes すると sampling に効かない。
 func (s *userService) fetchUser(ctx context.Context, userID string) (name string, err error) {
-	ctx, span := tracer.Start(ctx, "fetch user",
+	ctx, span := s.tracer.Start(ctx, "fetch user",
 		trace.WithAttributes(attribute.String("user.id", userID)),
 	)
 	defer span.End()
@@ -68,8 +73,8 @@ func (s *userService) fetchUser(ctx context.Context, userID string) (name string
 		}
 	}()
 
-	if name, cacheHit = s.cache.get(ctx, cacheKey(userID)); cacheHit {
-		return name, nil
+	if name, cacheHit, err = s.cache.get(ctx, cacheKey(userID)); err != nil || cacheHit {
+		return name, err
 	}
 
 	for attempt := 1; ; attempt++ {
@@ -90,7 +95,9 @@ func (s *userService) fetchUser(ctx context.Context, userID string) (name string
 			attribute.String("error.type", errorType(err)),
 		)
 		retries++
-		time.Sleep(backoff)
+		if err = sleep(ctx, backoff); err != nil {
+			return "", err
+		}
 	}
 }
 

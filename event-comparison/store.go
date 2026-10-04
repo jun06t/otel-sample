@@ -12,20 +12,28 @@ import (
 )
 
 // cache は常に miss する cache を模す。
-type cache struct{}
+type cache struct {
+	tracer trace.Tracer
+}
+
+func newCache(tracer trace.Tracer) *cache {
+	return &cache{tracer: tracer}
+}
 
 // get は区間のある操作なので子 span にする。
-func (c *cache) get(ctx context.Context, key string) (string, bool) {
-	_, span := tracer.Start(ctx, "cache get")
+func (c *cache) get(ctx context.Context, key string) (value string, hit bool, err error) {
+	ctx, span := c.tracer.Start(ctx, "cache get")
 	defer span.End()
 
-	time.Sleep(5 * time.Millisecond)
-	hit := false
+	if err := sleep(ctx, 5*time.Millisecond); err != nil {
+		recordSpanError(span, err)
+		return "", false, err
+	}
 	span.SetAttributes(
 		attribute.String("cache.key", key),
 		attribute.Bool("cache.hit", hit),
 	)
-	return "", hit
+	return "", hit, nil
 }
 
 // DBTimeoutError は DB クエリのタイムアウトを表す。
@@ -36,9 +44,16 @@ func (e *DBTimeoutError) Error() string {
 }
 
 // userDB は DB を模す。1 回目の呼び出しは必ずタイムアウトし、fail=true なら毎回タイムアウトする。
+// calls を排他制御していないので、並行に呼ぶことは想定していない。
 type userDB struct {
-	fail  bool
-	calls int
+	tracer trace.Tracer
+	logger log.Logger
+	fail   bool
+	calls  int
+}
+
+func newUserDB(tracer trace.Tracer, logger log.Logger, fail bool) *userDB {
+	return &userDB{tracer: tracer, logger: logger, fail: fail}
 }
 
 // selectUser は 1 回の DB 呼び出しを表す。DB client span の規約に従い、
@@ -48,7 +63,7 @@ type userDB struct {
 // 何回目の試行か、コネクションプールの状態、返した行数などを載せておくと、
 // 「タイムアウトした呼び出しはプールが枯渇していたか」を後から集計できる。
 func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (string, error) {
-	ctx, span := tracer.Start(ctx, "SELECT users",
+	ctx, span := db.tracer.Start(ctx, "SELECT users",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.String("db.system.name", "postgresql"),
@@ -60,15 +75,17 @@ func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (s
 	)
 	defer span.End()
 
-	time.Sleep(20 * time.Millisecond)
+	if err := sleep(ctx, 20*time.Millisecond); err != nil {
+		recordSpanError(span, err)
+		return "", err
+	}
 	db.calls++
 	if db.calls == 1 || db.fail {
 		inUse, idle := 10, 0
 		err := &DBTimeoutError{}
 		// 失敗したのはこの 1 回の呼び出しなので、この span の status と error.type に記録する。
-		span.SetStatus(codes.Error, "query timeout")
+		recordSpanError(span, err)
 		span.SetAttributes(
-			attribute.String("error.type", errorType(err)),
 			attribute.Int("app.db.pool.in_use", inUse),
 			attribute.Int("app.db.pool.idle", idle),
 		)
@@ -79,7 +96,7 @@ func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (s
 		r.SetTimestamp(time.Now())
 		r.SetSeverity(log.SeverityDebug)
 		r.SetBody(attribute.StringValue(fmt.Sprintf("connection pool exhausted: in_use=%d idle=%d", inUse, idle)))
-		logger.Emit(ctx, r)
+		db.logger.Emit(ctx, r)
 
 		return "", err
 	}
@@ -89,4 +106,22 @@ func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (s
 		attribute.Int("db.response.returned_rows", 1),
 	)
 	return "name-of-" + userID, nil
+}
+
+// sleep は d だけ待つ。ctx がキャンセルされたら待たずに ctx.Err() を返す。
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// recordSpanError は、その span の操作が失敗した事実を status と error.type に記録する。
+func recordSpanError(span trace.Span, err error) {
+	span.SetStatus(codes.Error, err.Error())
+	span.SetAttributes(attribute.String("error.type", errorType(err)))
 }
