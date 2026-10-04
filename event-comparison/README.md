@@ -19,12 +19,13 @@ Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**
 | span.name | status | user.id | user_agent.os.version | user_agent.version | app.user.plan | cache.hit | retry.count | app.db.attempt | app.db.pool.idle | error.type | … |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | fetch user | Error | alice | 14 | 2.3.1 | premium | false | 2 | | | DBTimeoutError | … |
-| cache get | Unset | | | | | false | | | | | … |
-| SELECT users | Error | | | | | | | 1 | 0 | DBTimeoutError | … |
-| SELECT users | Error | | | | | | | 2 | 0 | DBTimeoutError | … |
-| SELECT users | Error | | | | | | | 3 | 0 | DBTimeoutError | … |
+| cache get | Unset | | 14 | 2.3.1 | premium | false | | | | | … |
+| SELECT users | Error | | 14 | 2.3.1 | premium | | | 1 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | 14 | 2.3.1 | premium | | | 2 | 0 | DBTimeoutError | … |
+| SELECT users | Error | | 14 | 2.3.1 | premium | | | 3 | 0 | DBTimeoutError | … |
 
-- **メイン span（`fetch user`）にはリクエスト文脈**：開始時に分かる `user.id`、`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
+- **リクエスト文脈はすべての span に**：`user_agent.*`（アプリと OS のバージョン）、`app.user.country`、`app.user.plan`、`app.feature.new_profile` は context に入れ、`requestInfoProcessor` がすべての span に付ける（後述）
+- **メイン span（`fetch user`）には処理の入力と結果**：処理の入力である `user.id` は `tracer.Start` で、終わるまで分からない `cache.hit`、`retry.count`、`app.db.call.count`、`app.db.duration_ms`、`error.type` は終了時の `defer` で載せる
 - **子 span にはその操作固有の文脈**：`cache get` には `cache.key` / `cache.hit`、`SELECT users` には `db.*`、`db.client.connection.pool.name`、試行番号 `app.db.attempt`、プールの状態 `app.db.pool.in_use` / `app.db.pool.idle`、成功時の `db.response.returned_rows`
 
 これを Honeycomb や SigNoz（ClickHouse）のようなバックエンドに入れると、事前にメトリクスを定義しなくても、
@@ -36,13 +37,37 @@ WHERE span.name = "fetch user" GROUP BY user_agent.os.version, user_agent.versio
                                                         -- 未知の組み合わせでエラー率を切る
 WHERE span.name = "SELECT users" GROUP BY app.db.pool.idle
                                                         -- 子 span の列でも集計できる
+WHERE span.name = "SELECT users" GROUP BY app.user.plan SELECT p99(duration)
+                                                        -- 子 span をリクエスト文脈で切る
 ```
 
-> [!note] 集計軸にしたい列は同じ span に載せる
-> 別々の span にある列は、同時に条件にできない。たとえば `WHERE span.name = "SELECT users" AND app.user.plan = "premium"` は、
-> `app.user.plan` が `fetch user` にしか無いので 0 件になる。プランごとに DB の遅さを見たいなら、`SELECT users` にもプランを載せる必要がある。
+別々の span にある列は同時に条件にできないので、集計軸にしたい列は同じ span に載せる必要がある。
+リクエスト文脈をすべての span に付けているのはそのため。
 
-開始時に分かるものを開始時に渡すのは、sampler が判断に使えるのが span 作成時にある属性だけだから。
+## リクエスト文脈を context で渡す
+
+Go の `context` のドキュメントは「context の値は、プロセスや API をまたぐリクエスト単位のデータにだけ使い、
+関数のオプション引数の受け渡しには使わない」としている。そこで、リクエストの情報を使い道で分けている。
+
+| 情報 | 使い道 | 渡し方 |
+|---|---|---|
+| user ID | DB の検索キーとして処理に使う | 引数（`fetchUser(ctx, "alice")`）。入力が context に隠れると、関数のシグネチャから依存が読めなくなる |
+| OS、アプリのバージョン、国、プラン、feature flag の評価結果 | テレメトリーの次元にしか使わない | context（`withRequestInfo`）。どの層の span にも付けたい横断的な情報だから |
+
+- context のキーは、パッケージ間の衝突を避けるため外から見えない独自型（`requestInfoKey struct{}`）にし、`withRequestInfo` / `requestInfoFrom` からだけ触る
+- context の値は変えない。`cache.hit` や `retry.count` のように処理の途中で変わる値は context に入れない
+- `requestInfoProcessor` は SDK の `SpanProcessor` で、`OnStart` で context から取り出して span に付ける。各関数は requestInfo を意識しなくてよい
+- HTTP サーバーなら、`withRequestInfo` は middleware で呼ぶ。User-Agent、アクセストークンのクレーム、geo ヘッダーなどから組み立てる（このサンプルは CLI なので `main.go` で直接作っている）
+
+> [!note] sampling との関係
+> sampler が判断に使えるのは span 作成時にある属性だけ。`OnStart` は sampler の判断の後に、記録される span に対してだけ呼ばれるので、
+> `requestInfoProcessor` が付けた属性は head sampling には使えない（Collector の tail sampling なら使える）。
+> `user.id` を `tracer.Start` で渡しているのは、作成時の属性として sampler に見せるため。
+
+> [!note] 下流のサービスにも伝える場合
+> context の値はプロセス内にしか届かない。下流のサービスの span にも同じ列を付けたいなら、OTel の Baggage に入れ、
+> contrib の `baggagecopy.NewSpanProcessor(filter)` で span の属性にコピーする。
+> ただし Baggage は HTTP ヘッダーで下流（外部サービスを含む）にそのまま流れるので、個人情報は入れず filter で絞る。
 
 ## 置き場の選び方
 
@@ -146,9 +171,10 @@ OTLP でバックエンドに送って span と LogRecord の相関を画面で�
 
 ```
 event-comparison/
-├── main.go       # -fail / -span-events フラグ、終了コード
+├── main.go       # -fail / -span-events フラグ、リクエスト文脈の組み立て、終了コード
 ├── telemetry.go  # stdout exporter の TracerProvider / LoggerProvider
-├── fetch.go      # fetchUser：メイン span のリクエスト文脈・リトライ・例外の置き場
+├── reqctx.go     # リクエスト文脈の context と、全 span に付ける SpanProcessor
+├── fetch.go      # fetchUser：メイン span の入力と結果・リトライ・例外の置き場
 ├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ
 └── events.go     # event を Logs API / span event で書く 2 つの実装
 ```

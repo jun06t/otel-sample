@@ -14,38 +14,6 @@ import (
 // maxAttempts は DB クエリの最大試行回数。
 const maxAttempts = 3
 
-// request は 1 回のユーザー取得リクエストの文脈。
-// 実際のサービスなら認証情報や User-Agent、feature flag の評価結果から組み立てる。
-type request struct {
-	UserID     string
-	Country    string // ISO 3166-1 alpha-2
-	Plan       string
-	OSName     string
-	OSVersion  string
-	AppName    string
-	AppVersion string
-	NewProfile bool // feature flag: 新しいプロフィール画面
-}
-
-// startAttributes は開始時に分かるリクエスト文脈を返す。
-//
-// wide event の考え方では、span 1 本を 1 行、属性を列とみなし、何に使うか分からなくても
-// 関係しそうな文脈は全部載せておく。障害調査のときに、事前に用意していない組み合わせ
-// (例: OS のバージョン × アプリのバージョン)で絞り込めるようにするため。
-// cardinality が高い値(user.id など)も避けない。
-func (r request) startAttributes() []attribute.KeyValue {
-	return []attribute.KeyValue{
-		attribute.String("user.id", r.UserID),
-		attribute.String("user_agent.name", r.AppName),
-		attribute.String("user_agent.version", r.AppVersion),
-		attribute.String("user_agent.os.name", r.OSName),
-		attribute.String("user_agent.os.version", r.OSVersion),
-		attribute.String("app.user.country", r.Country),
-		attribute.String("app.user.plan", r.Plan),
-		attribute.Bool("app.feature.new_profile", r.NewProfile),
-	}
-}
-
 type userService struct {
 	cache  *cache
 	db     *userDB
@@ -54,10 +22,12 @@ type userService struct {
 
 // fetchUser は cache を引き、miss なら DB をリトライ付きで引く。
 //
-// どの span も wide event の 1 行として属性(列)を太らせる。このメイン span には
-// リクエスト全体の文脈(開始時に分かるものと、cache.hit や DB の呼び出し回数・合計時間など
-// 終わるまで分からない結果)を載せ、子 span(store.go)にはその操作固有の属性を載せる。
-// 別々の span にある属性は同時に条件にできないので、集計軸にしたい属性は同じ span に載せる。
+// どの span も wide event の 1 行として属性(列)を太らせる。
+//   - リクエスト文脈(OS、アプリのバージョン、プランなど)は context に入っており、
+//     requestInfoProcessor(reqctx.go)がすべての span に付ける
+//   - このメイン span には、処理の入力である user.id と、cache.hit や DB の呼び出し回数・
+//     合計時間など終わるまで分からない結果を載せる
+//   - 子 span(store.go)にはその操作固有の属性を載せる
 //
 // それ以外の置き場は semconv の Events ガイダンスに従って選んでいる。
 //
@@ -68,9 +38,9 @@ type userService struct {
 //
 // 開始時に分かる属性は tracer.Start で渡す。sampler が判断に使えるのは
 // span 作成時にある属性だけなので、後から SetAttributes すると sampling に効かない。
-func (s *userService) fetchUser(ctx context.Context, req request) (name string, err error) {
+func (s *userService) fetchUser(ctx context.Context, userID string) (name string, err error) {
 	ctx, span := tracer.Start(ctx, "fetch user",
-		trace.WithAttributes(req.startAttributes()...),
+		trace.WithAttributes(attribute.String("user.id", userID)),
 	)
 	defer span.End()
 
@@ -98,13 +68,13 @@ func (s *userService) fetchUser(ctx context.Context, req request) (name string, 
 		}
 	}()
 
-	if name, cacheHit = s.cache.get(ctx, cacheKey(req.UserID)); cacheHit {
+	if name, cacheHit = s.cache.get(ctx, cacheKey(userID)); cacheHit {
 		return name, nil
 	}
 
 	for attempt := 1; ; attempt++ {
 		start := time.Now()
-		name, err = s.db.selectUser(ctx, req.UserID, attempt)
+		name, err = s.db.selectUser(ctx, userID, attempt)
 		dbCalls++
 		dbDuration += time.Since(start)
 		if err == nil || attempt == maxAttempts {

@@ -41,9 +41,9 @@ func run() int {
 		events: events,
 	}
 
-	// エラーの記録は fetchUser の中で済んでいる。ここでは終了コードにだけ反映する。
-	_, fetchErr := s.fetchUser(ctx, request{
-		UserID:     "alice",
+	// HTTP サーバーなら middleware が行う処理。テレメトリーの次元だけを context に入れ、
+	// 処理の入力である user ID は引数で渡す。
+	ctx = withRequestInfo(ctx, requestInfo{
 		Country:    "JP",
 		Plan:       "premium",
 		OSName:     "Android",
@@ -52,6 +52,9 @@ func run() int {
 		AppVersion: "2.3.1",
 		NewProfile: true,
 	})
+
+	// エラーの記録は fetchUser の中で済んでいる。ここでは終了コードにだけ反映する。
+	_, fetchErr := s.fetchUser(ctx, "alice")
 
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
