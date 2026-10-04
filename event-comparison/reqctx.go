@@ -66,10 +66,14 @@ func (i requestInfo) attributes() []attribute.KeyValue {
 // ここで付けた属性は head sampling の判断には使えない(tail sampling なら使える)。
 type requestInfoProcessor struct{}
 
-var _ sdktrace.SpanProcessor = requestInfoProcessor{}
+var _ sdktrace.SpanProcessor = (*requestInfoProcessor)(nil)
 
-func (requestInfoProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
-	if p := s.Parent(); p.IsValid() && !p.IsRemote() {
+func newRequestInfoProcessor() *requestInfoProcessor {
+	return &requestInfoProcessor{}
+}
+
+func (p *requestInfoProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
+	if sc := s.Parent(); sc.IsValid() && !sc.IsRemote() {
 		// 同じプロセスに親がいる子 span には付けない。
 		return
 	}
@@ -78,8 +82,8 @@ func (requestInfoProcessor) OnStart(parent context.Context, s sdktrace.ReadWrite
 	}
 }
 
-func (requestInfoProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
+func (p *requestInfoProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
 
-func (requestInfoProcessor) Shutdown(context.Context) error { return nil }
+func (p *requestInfoProcessor) Shutdown(context.Context) error { return nil }
 
-func (requestInfoProcessor) ForceFlush(context.Context) error { return nil }
+func (p *requestInfoProcessor) ForceFlush(context.Context) error { return nil }

@@ -44,7 +44,7 @@ func newTelemetry() (*telemetry, error) {
 	}
 	tp := sdktrace.NewTracerProvider(
 		// context のリクエスト文脈を、このサービスのルート span に属性として付ける。
-		sdktrace.WithSpanProcessor(requestInfoProcessor{}),
+		sdktrace.WithSpanProcessor(newRequestInfoProcessor()),
 		sdktrace.WithSyncer(te),
 		sdktrace.WithResource(res),
 	)
