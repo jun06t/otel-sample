@@ -162,6 +162,10 @@ GROUP BY os, osv, app ORDER BY pct DESC LIMIT 3
 > ログのテーブル（`signoz_logs.logs_v2`）には EventName の列がなく、捨てられる。そのため SigNoz 上では、
 > `db.query.retry` や `user.fetch.exception` の log-based event と、EventName なしの診断ログを名前で区別できない。
 > Body・severity・属性と trace_id / span_id は保存されるので、span からログへの移動はできる。
+>
+> 2026-10 時点で最新の `signoz-otel-collector` v0.144.12（2026-09-25）でも、ログの exporter（`exporter/clickhouselogsexporter`）は
+> EventName を読んでいない。対応は SigNoz の issue [SigNoz/signoz#8140「LOGS: Support for event name」](https://github.com/SigNoz/signoz/issues/8140)
+> で 2025-06 から open のままで、対応する PR もまだない。
 
 ## 出力（`-fail` の場合、要点のみ）
 
