@@ -1,18 +1,23 @@
-# event-comparison — span を wide event として太らせ、残りの置き場を選び分ける
+# event-comparison — span を wide event にし、残りの置き場を選び分ける
 
 参照: [Observability 1.0 と Observability 2.0](https://christina04.hatenablog.com/entry/observability_2_0) / [All you need is Wide Events, not "Metrics, Logs and Traces"](https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics) / [Semantic conventions for events](https://opentelemetry.io/docs/specs/semconv/general/events/)（Status: Development） / [Recording errors](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/) / [Exceptions in logs](https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-logs/) / [Database client spans](https://opentelemetry.io/docs/specs/semconv/db/database-spans/) / [Deprecating Span Events API](https://opentelemetry.io/blog/2026/deprecating-span-events/)
 
 「ユーザー取得 → cache miss → DB クエリを最大 3 回リトライ」という 1 つの処理で、
-すべての span を **wide event**（高次元・高カーディナリティな 1 行）として太らせ、
+すべての span を **wide event**（高次元・高カーディナリティな 1 行）にし、
 それ以外は記録したいものごとに置き場を選び分けるサンプル。stdout exporter で出力するので、
 バックエンドなしで **何がどの信号に・どの形で載るか**を確認できる。
 
-## span を wide event として太らせる
+## span を wide event にする
 
 span と聞くと、名前・所要時間・status と数個のタグを持つ Observability 1.0 のイメージになりがち。
 Observability 2.0 の wide event では、**span 1 本を 1 行、属性を列**とみなし、
-1 span あたり数十〜数百の列を持たせる。関係しそうな文脈は何に使うか分からなくても載せ、
+1 span あたり数十〜数百の列（dimensions）を持たせる。関係しそうな文脈は何に使うか分からなくても属性として足し、
 `user.id` のような cardinality が高い値も避けない。
+
+Honeycomb はこれを "arbitrarily wide structured event" と呼び、"dozens to hundreds of dimensions per event" を持つもの、
+と説明している（[Structured Events Are the Basis of Observability](https://www.honeycomb.io/blog/structured-events-basis-observability)）。
+OTel の span との関係は、ドキュメントで "attach contextual information to the spans"（span に文脈を属性として付ける）と表現している
+（[Add Custom Instrumentation](https://docs.honeycomb.io/send-data/standardize/add-custom-instrumentation)）。
 
 `go run . -fail` の 1 トレースを表にすると次のようになる（空欄はその span に無い列）。
 
@@ -73,7 +78,7 @@ Go の `context` のドキュメントは「context の値は、プロセスや 
 ## 置き場の選び方
 
 wide event 以外の置き場は、OTel の semconv（Events）の指針に従っている。
-「wide event」は OTel の公式用語ではなく、この表のどこか 1 行に当たるものでもない。span（と span 属性）をどう太らせるかという粒度の捉え方。
+「wide event」は OTel の公式用語ではなく、この表のどこか 1 行に当たるものでもない。span にどれだけの文脈（dimensions）を持たせるかという粒度の捉え方。
 
 | 記録したいもの | 置き場 | このサンプルでの例 |
 |---|---|---|

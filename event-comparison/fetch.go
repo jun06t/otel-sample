@@ -22,7 +22,7 @@ type userService struct {
 
 // fetchUser は cache を引き、miss なら DB をリトライ付きで引く。
 //
-// どの span も wide event の 1 行として属性(列)を太らせる。
+// どの span も wide event の 1 行として、文脈を属性(列)として足していく。
 //   - リクエスト文脈(OS、アプリのバージョン、プランなど)は context に入っており、
 //     requestInfoProcessor(reqctx.go)がルート span であるこの span に付ける
 //   - このメイン span には、処理の入力である user.id と、cache.hit や DB の呼び出し回数・
