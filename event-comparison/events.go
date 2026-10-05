@@ -41,6 +41,7 @@ func (r *logEventRecorder) event(ctx context.Context, name string, sev log.Sever
 	rec.SetEventName(name) // これが空なら普通のログ
 	rec.SetTimestamp(time.Now())
 	rec.SetSeverity(sev)
+	rec.SetSeverityText(sev.String()) // SigNoz などはログレベルの表示に severity_text を使う
 	if err != nil {
 		// 非推奨の error.message 属性ではなく Body に入れる。
 		rec.SetBody(attribute.StringValue(err.Error()))

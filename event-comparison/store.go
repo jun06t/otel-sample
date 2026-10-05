@@ -11,13 +11,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// cache は常に miss する cache を模す。
+// cache は cache を模す。hit で、引いたときに hit するかを決める。
 type cache struct {
 	tracer trace.Tracer
+	hit    bool
 }
 
-func newCache(tracer trace.Tracer) *cache {
-	return &cache{tracer: tracer}
+func newCache(tracer trace.Tracer, hit bool) *cache {
+	return &cache{tracer: tracer, hit: hit}
 }
 
 // get は区間のある操作なので子 span にする。
@@ -31,9 +32,12 @@ func (c *cache) get(ctx context.Context, key string) (value string, hit bool, er
 	}
 	span.SetAttributes(
 		attribute.String("cache.key", key),
-		attribute.Bool("cache.hit", hit),
+		attribute.Bool("cache.hit", c.hit),
 	)
-	return "", hit, nil
+	if !c.hit {
+		return "", false, nil
+	}
+	return "cached-name", true, nil
 }
 
 // DBTimeoutError は DB クエリのタイムアウトを表す。
@@ -43,17 +47,17 @@ func (e *DBTimeoutError) Error() string {
 	return "db query timeout"
 }
 
-// userDB は DB を模す。1 回目の呼び出しは必ずタイムアウトし、fail=true なら毎回タイムアウトする。
-// calls を排他制御していないので、並行に呼ぶことは想定していない。
+// userDB は DB を模す。最初の timeouts 回の呼び出しをタイムアウトさせる。
+// calls を排他制御していないので、並行に呼ぶことは想定していない(リクエストごとに作る)。
 type userDB struct {
-	tracer trace.Tracer
-	logger log.Logger
-	fail   bool
-	calls  int
+	tracer   trace.Tracer
+	logger   log.Logger
+	timeouts int
+	calls    int
 }
 
-func newUserDB(tracer trace.Tracer, logger log.Logger, fail bool) *userDB {
-	return &userDB{tracer: tracer, logger: logger, fail: fail}
+func newUserDB(tracer trace.Tracer, logger log.Logger, timeouts int) *userDB {
+	return &userDB{tracer: tracer, logger: logger, timeouts: timeouts}
 }
 
 // selectUser は 1 回の DB 呼び出しを表す。DB client span の規約に従い、
@@ -80,7 +84,7 @@ func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (s
 		return "", err
 	}
 	db.calls++
-	if db.calls == 1 || db.fail {
+	if db.calls <= db.timeouts {
 		inUse, idle := 10, 0
 		err := &DBTimeoutError{}
 		// 失敗したのはこの 1 回の呼び出しなので、この span の status と error.type に記録する。
@@ -95,6 +99,7 @@ func (db *userDB) selectUser(ctx context.Context, userID string, attempt int) (s
 		var r log.Record
 		r.SetTimestamp(time.Now())
 		r.SetSeverity(log.SeverityDebug)
+		r.SetSeverityText(log.SeverityDebug.String())
 		r.SetBody(attribute.StringValue(fmt.Sprintf("connection pool exhausted: in_use=%d idle=%d", inUse, idle)))
 		db.logger.Emit(ctx, r)
 
