@@ -12,6 +12,25 @@ services:
     networks:
       - signoz
 
+  # ダッシュボードに連続した線を出すための負荷生成。既定では起動しない。
+  #   docker compose --profile load up -d
+  loadgen:
+    image: curlimages/curl:8.11.1
+    entrypoint: ["sh", "/loadgen.sh"]
+    environment:
+      - TARGET=http://app:8000/order
+      - INTERVAL=1
+      - ERROR_RATE=15
+    volumes:
+      - ./loadgen.sh:/loadgen.sh:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+    profiles:
+      - load
+    networks:
+      - signoz
+
 networks:
   # foundry で起動した SigNoz が作る外部ネットワーク。
   # 名前が異なる場合は `docker network ls` で確認して合わせる。
