@@ -106,12 +106,17 @@ go run . -fail -span-events   # 同じ event を span event で記録する
 | `-interval` | `0` | リクエストの間隔 |
 | `-seed` | `1` | 文脈をばらつかせる乱数のシード |
 
+送り先は OTel の標準の環境変数で決まる（contrib の [`autoexport`](https://pkg.go.dev/go.opentelemetry.io/contrib/exporters/autoexport) が読む）。
+
 | 環境変数 | 説明 |
 |---|---|
-| `EXPORTER_ENDPOINT` | 設定すると OTLP gRPC でそこへ送る（例: `localhost:4317`）。未設定なら stdout に出す |
+| `OTEL_TRACES_EXPORTER` / `OTEL_LOGS_EXPORTER` | `otlp` / `console` / `none`。未設定なら stdout に整形して出す |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP の送り先（例: `http://localhost:4317`）。`http://` なら TLS なしで送る |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` / `http/protobuf`（既定は `http/protobuf`） |
+| `COPY_EVENT_NAME_TO_ATTRIBUTE` | `true` なら LogRecord の EventName を `event.name` 属性にもコピーする（SigNoz 向け。後述） |
 
-stdout に出すときは、traces / logs とも同期 export（`SimpleSpanProcessor` / `SimpleProcessor`）にしているので、
-LogRecord は Emit した瞬間に、span は End した瞬間に出力される。OTLP で送るときは本番と同じくバッチで送る。
+`OTEL_TRACES_EXPORTER` が未設定のときは、traces / logs とも同期 export（`SimpleSpanProcessor` / `SimpleProcessor`）にしているので、
+LogRecord は Emit した瞬間に、span は End した瞬間に出力される。それ以外は本番と同じくバッチで送る。
 
 `-requests 1` のときだけ、失敗したら終了コード 1 を返す。2 件以上送るときは、最後に `sent=... failed=...` を出して 0 で終わる。
 
@@ -126,7 +131,10 @@ Jaeger はトレース専用で logs 信号を受け取らず、属性での集�
    ```bash
    docker compose up -d --build
    # またはローカルから
-   EXPORTER_ENDPOINT=localhost:4317 go run . -requests=0 -interval=200ms
+   OTEL_TRACES_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=none \
+   OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+   COPY_EVENT_NAME_TO_ATTRIBUTE=true \
+   go run . -requests=0 -interval=200ms
    ```
 
 3. <http://localhost:8080> を開く
@@ -162,6 +170,11 @@ GROUP BY os, osv, app ORDER BY pct DESC LIMIT 3
 > ログのテーブル（`signoz_logs.logs_v2`）には EventName の列がなく、捨てられる。そのため SigNoz 上では、
 > `db.query.retry` や `user.fetch.exception` の log-based event と、EventName なしの診断ログを名前で区別できない。
 > Body・severity・属性と trace_id / span_id は保存されるので、span からログへの移動はできる。
+>
+> そこで `COPY_EVENT_NAME_TO_ATTRIBUTE=true`（`docker-compose.yml` では設定済み）のときは、`eventNameAttrProcessor`（`eventname.go`）が
+> EventName を `event.name` 属性にもコピーする。SDK の log processor は登録順に呼ばれ、`OnEmit` で書き換えた内容は次の processor に
+> 渡るので、export する processor より前に登録している。これで SigNoz でも `event.name = db.query.retry` のように絞り込める。
+> ただし `event.name` 属性は semconv で非推奨なので、SigNoz が EventName に対応するまでのつなぎとして扱う。
 >
 > 2026-10 時点で最新の `signoz-otel-collector` v0.144.12（2026-09-25）でも、ログの exporter（`exporter/clickhouselogsexporter`）は
 > EventName を読んでいない。対応は SigNoz の issue [SigNoz/signoz#8140「LOGS: Support for event name」](https://github.com/SigNoz/signoz/issues/8140)
@@ -239,12 +252,13 @@ zap のログを otelzap 経由で SigNoz に送る例は [`../signoz-wide-event
 ```
 event-comparison/
 ├── main.go       # フラグ、依存の組み立て、リクエストを送るループ、終了コード
-├── telemetry.go  # stdout / OTLP の TracerProvider / LoggerProvider と、そこから取り出す tracer / logger
+├── telemetry.go  # TracerProvider / LoggerProvider（送り先は autoexport で選ぶ）と、そこから取り出す tracer / logger
 ├── loadgen.go    # 1 リクエストぶんの条件（文脈、cache・DB の振る舞い）と、仕込んだ不具合
 ├── reqctx.go     # リクエスト文脈の context と、ルート span に付ける SpanProcessor
 ├── fetch.go      # fetchUser：メイン span の入力と結果・リトライ・例外の置き場
 ├── store.go      # cache / DB の子 span（操作固有の文脈）と、診断用の普通のログ、ctx 対応の待ち処理
 ├── events.go     # event を Logs API / span event で書く 2 つの実装（eventRecorder）
+├── eventname.go  # EventName を event.name 属性にもコピーする log processor（SigNoz 向けのつなぎ）
 ├── Dockerfile
 └── docker-compose.yml  # SigNoz のネットワークに参加して OTLP で送り続ける
 ```

@@ -3,15 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+
+	"go.opentelemetry.io/contrib/exporters/autoexport"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -26,12 +26,7 @@ type telemetry struct {
 }
 
 // newTelemetry は traces と logs の provider を作る。
-//
-// endpoint が空なら stdout に出す。出力の並びで「いつ・どの信号に載るか」を見せたいので、
-// どちらも同期で export する(LogRecord は Emit した瞬間に、span は End した瞬間に出力される)。
-//
-// endpoint があれば、OTLP gRPC で SigNoz などのバックエンドに送る。こちらは本番と同じくバッチで送る。
-func newTelemetry(ctx context.Context, endpoint string) (*telemetry, error) {
+func newTelemetry(ctx context.Context) (*telemetry, error) {
 	// resource.Default() の telemetry.sdk.* 属性を残したまま service.name を足す。
 	res, err := resource.Merge(
 		resource.Default(),
@@ -41,38 +36,9 @@ func newTelemetry(ctx context.Context, endpoint string) (*telemetry, error) {
 		return nil, err
 	}
 
-	var (
-		spanProcessor sdktrace.SpanProcessor
-		logProcessor  sdklog.Processor
-	)
-	if endpoint == "" {
-		te, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
-		if err != nil {
-			return nil, err
-		}
-		le, err := stdoutlog.New(stdoutlog.WithPrettyPrint())
-		if err != nil {
-			return nil, err
-		}
-		spanProcessor = sdktrace.NewSimpleSpanProcessor(te)
-		logProcessor = sdklog.NewSimpleProcessor(le)
-	} else {
-		te, err := otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(endpoint),
-			otlptracegrpc.WithInsecure(),
-		)
-		if err != nil {
-			return nil, err
-		}
-		le, err := otlploggrpc.New(ctx,
-			otlploggrpc.WithEndpoint(endpoint),
-			otlploggrpc.WithInsecure(),
-		)
-		if err != nil {
-			return nil, err
-		}
-		spanProcessor = sdktrace.NewBatchSpanProcessor(te)
-		logProcessor = sdklog.NewBatchProcessor(le)
+	spanProcessor, logProcessor, err := newProcessors(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -81,17 +47,54 @@ func newTelemetry(ctx context.Context, endpoint string) (*telemetry, error) {
 		sdktrace.WithSpanProcessor(spanProcessor),
 		sdktrace.WithResource(res),
 	)
-	lp := sdklog.NewLoggerProvider(
-		sdklog.WithProcessor(logProcessor),
-		sdklog.WithResource(res),
-	)
+
+	logOpts := []sdklog.LoggerProviderOption{sdklog.WithResource(res)}
+	if os.Getenv("COPY_EVENT_NAME_TO_ATTRIBUTE") == "true" {
+		// export する processor より前に登録し、書き換えた LogRecord が渡るようにする。
+		logOpts = append(logOpts, sdklog.WithProcessor(newEventNameAttrProcessor()))
+	}
+	logOpts = append(logOpts, sdklog.WithProcessor(logProcessor))
+	lp := sdklog.NewLoggerProvider(logOpts...)
 
 	// アプリのコードは provider から直接受け取るが、グローバルの provider を使う
 	// 計装ライブラリ(otelhttp など)のためにグローバルにも登録しておく。
 	otel.SetTracerProvider(tp)
-	global.SetLoggerProvider(lp)
+	otel.SetLoggerProvider(lp)
 
 	return &telemetry{tracerProvider: tp, loggerProvider: lp}, nil
+}
+
+// newProcessors は export する processor を作る。
+//
+// 送り先は autoexport が標準の環境変数から決める。
+//   - OTEL_TRACES_EXPORTER / OTEL_LOGS_EXPORTER: otlp / console / none
+//   - OTEL_EXPORTER_OTLP_ENDPOINT、OTEL_EXPORTER_OTLP_PROTOCOL など: OTLP の送り先と方式
+//
+// OTEL_TRACES_EXPORTER が未設定なら stdout に整形して出す。このときは出力の並びで
+// 「いつ・どの信号に載るか」を見せたいので同期で export する(LogRecord は Emit した瞬間に、
+// span は End した瞬間に出力される)。それ以外は本番と同じくバッチで送る。
+func newProcessors(ctx context.Context) (sdktrace.SpanProcessor, sdklog.Processor, error) {
+	te, err := autoexport.NewSpanExporter(ctx, autoexport.WithFallbackSpanExporter(
+		func(context.Context) (sdktrace.SpanExporter, error) {
+			return stdouttrace.New(stdouttrace.WithPrettyPrint())
+		},
+	))
+	if err != nil {
+		return nil, nil, err
+	}
+	le, err := autoexport.NewLogExporter(ctx, autoexport.WithFallbackLogExporter(
+		func(context.Context) (sdklog.Exporter, error) {
+			return stdoutlog.New(stdoutlog.WithPrettyPrint())
+		},
+	))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if os.Getenv("OTEL_TRACES_EXPORTER") == "" {
+		return sdktrace.NewSimpleSpanProcessor(te), sdklog.NewSimpleProcessor(le), nil
+	}
+	return sdktrace.NewBatchSpanProcessor(te), sdklog.NewBatchProcessor(le), nil
 }
 
 func (t *telemetry) tracer() trace.Tracer {

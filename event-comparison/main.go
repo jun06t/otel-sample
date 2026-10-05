@@ -34,9 +34,8 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// EXPORTER_ENDPOINT があれば OTLP で送り、なければ stdout に出す。
-	endpoint := os.Getenv("EXPORTER_ENDPOINT")
-	tel, err := newTelemetry(ctx, endpoint)
+	// 送り先は標準の環境変数(OTEL_TRACES_EXPORTER など)で決まる。未設定なら stdout に出す。
+	tel, err := newTelemetry(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup telemetry: %v\n", err)
 		return 1

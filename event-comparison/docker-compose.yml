@@ -5,9 +5,16 @@ services:
     # 文脈をばらつかせたリクエストを、止めるまで 200ms ごとに送り続ける。
     command: ["-requests=0", "-interval=200ms"]
     environment:
+      # 送り先は OTel の標準の環境変数で指定する(contrib の autoexport が読む)。
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       # SigNoz が内蔵する OTel Collector(ingester) の OTLP gRPC。
-      # 下の signoz ネットワークに相乗りし、コンテナ名で直接届ける。
-      - EXPORTER_ENDPOINT=signoz-ingester:4317
+      # 下の signoz ネットワークに相乗りし、コンテナ名で直接届ける。http:// なので TLS なしで送る。
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-ingester:4317
+      # SigNoz は LogRecord の EventName を保存しないので、event.name 属性にもコピーする(SigNoz/signoz#8140)。
+      - COPY_EVENT_NAME_TO_ATTRIBUTE=true
     networks:
       - signoz
 
